@@ -2,6 +2,7 @@
 .gradle/
 **/.gradle/
 **/build/
+**/.cxx/
 local.properties
 
 # Android outputs and signing material
@@ -15,13 +16,13 @@ local.properties
 *.key
 
 # Generated or device-private runtime material
-codex-cli-pack/build/generated/
-runtime/
-alpine-rootfs/
-codex-home/
-auth/
-captures/
-screenshots/
+/codex-cli-pack/build/generated/
+/runtime/
+/alpine-rootfs/
+/codex-home/
+/auth/
+/captures/
+/screenshots/
 *.log
 
 # Python cache and local test state

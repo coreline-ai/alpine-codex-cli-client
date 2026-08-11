@@ -31,6 +31,18 @@ android {
         compose = true
     }
 
+    // The installer copies the bundled rootfs as an asset and executes PRoot
+    // from the native-library directory inside this debug-only APK.
+    androidResources {
+        noCompress += "asset"
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -42,6 +54,15 @@ android {
 }
 
 dependencies {
+    implementation(project(":alpine-runtime-api"))
+    implementation(project(":alpine-runtime-android"))
+    implementation(project(":alpine-runtime-host"))
+    implementation(project(":alpine-runtime-background-android"))
+    implementation(project(":alpine-runtime-ui-compose"))
+    implementation(project(":alpine-runtime-pack-bundled"))
+    implementation(project(":alpine-workspace-api"))
+    implementation(project(":alpine-workspace-android"))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
@@ -49,6 +70,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

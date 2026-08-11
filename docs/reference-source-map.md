@@ -44,6 +44,12 @@ Phase 1에서는 실제로 복사하는 모든 source/resource/binary 파일을 
 directory 단위 복사는 금지하고, 각 항목의 source SHA-256과 destination SHA-256이 같은지
 `scripts/verify-reference-source-map.sh`로 확인한다.
 
+Phase 1의 허용 파일 목록과 source/destination hash는
+[`reference-runtime-files.tsv`](reference-runtime-files.tsv)에 생성한다. 이 파일은
+`scripts/import-runtime-reference.sh`가 8개 허용 module에서 build/cache/.cxx를 제외한 file만
+선별 이식하면서 작성한다. destination hash가 source hash와 다르면 script는 overwrite하지 않고 실패한다.
+이식 후에는 `scripts/verify-runtime-reference-manifest.sh`가 source와 destination hash를 모두 검증한다.
+
 ## Dirty UI snapshot — import requires explicit review
 
 | Reference path | Planned destination | SHA-256 | 상태 |
