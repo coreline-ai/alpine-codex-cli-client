@@ -76,7 +76,7 @@ data class CodexChatUiState(
 }
 
 /** UI state owner for one Codex-only chat session. No alternate backend or prompt replay exists. */
-class CodexChatViewModel(
+class CodexChatViewModel @JvmOverloads constructor(
     application: Application,
     private val runtimeStateSource: CodexRuntimeStateSource = (application as AlpineCodexApplication).codexRuntimeController,
     private val gatewayClient: dev.alpine.codexclient.bridge.CodexGatewayClient =
