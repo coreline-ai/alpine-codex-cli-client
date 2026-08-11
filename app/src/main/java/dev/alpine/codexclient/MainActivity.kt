@@ -76,6 +76,12 @@ private fun AlpineCodexClientApp(runtimeViewModel: RuntimeViewModel) {
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                    state.appServerSmoke?.let { outcome ->
+                        Text(
+                            text = "Codex app-server 준비: ${outcome.name}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                     Button(
                         enabled = !state.busy && state.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.NOT_INSTALLED,
                         onClick = runtimeViewModel::install,
@@ -99,6 +105,12 @@ private fun AlpineCodexClientApp(runtimeViewModel: RuntimeViewModel) {
                         onClick = runtimeViewModel::prepareCodexCli,
                     ) {
                         Text("Codex CLI 준비·검증")
+                    }
+                    Button(
+                        enabled = !state.busy && state.sessionActive,
+                        onClick = runtimeViewModel::runAppServerSmoke,
+                    ) {
+                        Text("Codex app-server 초기화·계정 확인")
                     }
                     OutlinedButton(
                         enabled = !state.busy,

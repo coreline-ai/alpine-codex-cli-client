@@ -63,6 +63,7 @@ dependencies {
     implementation(project(":alpine-workspace-api"))
     implementation(project(":alpine-workspace-android"))
     implementation(project(":codex-cli-pack"))
+    implementation(project(":codex-gateway-pack-bundled"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

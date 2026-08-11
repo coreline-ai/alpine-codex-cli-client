@@ -17,6 +17,8 @@ import dev.alpine.workspace.android.AppPrivateWorkspaceStore
 import dev.alpine.workspace.api.WorkspaceStore
 import dev.alpine.codexclient.cli.CodexCliArtifactProvider
 import dev.alpine.codexclient.cli.StagedCodexCli
+import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactProvider
+import dev.alpine.codexclient.gatewaypack.StagedCodexGateway
 import java.io.File
 
 class AlpineCodexApplication : Application() {
@@ -35,6 +37,8 @@ class AlpineCodexApplication : Application() {
     lateinit var codexGatewayDirectory: File
         private set
     lateinit var codexCliArtifactProvider: CodexCliArtifactProvider
+        private set
+    lateinit var codexGatewayArtifactProvider: CodexGatewayArtifactProvider
         private set
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
@@ -82,6 +86,7 @@ class AlpineCodexApplication : Application() {
             File(codexWorkspaceDirectory, CodexRuntimePaths.GATEWAY_DIRECTORY),
         )
         codexCliArtifactProvider = CodexCliArtifactProvider(this)
+        codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
         backgroundBinding = RuntimeBackgroundHostRegistry.bind {
             runtimeManager.stop(RuntimeStopReason.USER_REQUEST)
         }
@@ -96,6 +101,12 @@ class AlpineCodexApplication : Application() {
     fun stageCodexCli(): StagedCodexCli = codexCliArtifactProvider.stage(
         hostStagingDirectory = codexStagingDirectory,
         guestStagingDirectory = CodexRuntimePaths.GUEST_STAGING,
+    )
+
+    /** Stages only the manifest-verified local Python supervisor package. */
+    fun stageCodexGateway(): StagedCodexGateway = codexGatewayArtifactProvider.stage(
+        hostGatewayDirectory = codexGatewayDirectory,
+        guestGatewayDirectory = CodexRuntimePaths.GUEST_GATEWAY,
     )
 
     private fun ensurePrivateDirectory(directory: File): File {

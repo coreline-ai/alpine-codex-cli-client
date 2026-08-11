@@ -12,6 +12,7 @@ import dev.alpine.runtime.api.RuntimeOperationException
 import dev.alpine.runtime.host.RuntimeHostOperation
 import dev.alpine.runtime.host.RuntimeHostState
 import dev.alpine.codexclient.cli.CodexCliArtifactException
+import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,7 @@ data class RuntimeUiState(
     val errorCode: RuntimeErrorCode? = null,
     val gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
     val codexCliBootstrap: CodexCliBootstrapOutcome? = null,
+    val appServerSmoke: AppServerSmokeOutcome? = null,
 )
 
 /** Closed state for the one fixed package bootstrap; guest output is never retained in UI state. */
@@ -49,6 +51,13 @@ enum class CodexCliBootstrapOutcome {
     VERSION_CHECK_FAILED,
 }
 
+/** Closed outcome of the fixed initialize/account-read smoke; account details are discarded. */
+enum class AppServerSmokeOutcome {
+    READY,
+    STAGING_FAILED,
+    INITIALIZE_OR_ACCOUNT_FAILED,
+}
+
 class RuntimeViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as AlpineCodexApplication
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -63,6 +72,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                     status = current.status,
                     gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                     codexCliBootstrap = current.codexCliBootstrap,
+                    appServerSmoke = current.appServerSmoke,
                 )
             }
         }
@@ -112,6 +122,59 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                     CompletableFuture.completedFuture(Unit)
                 } else {
                     setCodexCliBootstrap(CodexCliBootstrapOutcome.VERSION_CHECK_FAILED)
+                    failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
+                }
+            }
+        }
+    }
+
+    /** Runs exactly initialize then account/read through the staged Python supervisor. */
+    fun runAppServerSmoke() {
+        if (_state.value.busy || !_state.value.sessionActive) return
+        _state.update { it.copy(appServerSmoke = null) }
+        runOperation(
+            pendingStatus = "APP_SERVER_SMOKE_STARTING",
+            successStatus = "APP_SERVER_SMOKE_READY",
+        ) {
+            val cli = try {
+                app.stageCodexCli()
+            } catch (_: CodexCliArtifactException) {
+                setAppServerSmoke(AppServerSmokeOutcome.STAGING_FAILED)
+                return@runOperation failedStage<Unit>(
+                    RuntimeOperationException(RuntimeErrorCode.ARTIFACT_INTEGRITY_FAILED),
+                )
+            }
+            val gateway = try {
+                app.stageCodexGateway()
+            } catch (_: CodexGatewayArtifactException) {
+                setAppServerSmoke(AppServerSmokeOutcome.STAGING_FAILED)
+                return@runOperation failedStage<Unit>(
+                    RuntimeOperationException(RuntimeErrorCode.ARTIFACT_INTEGRITY_FAILED),
+                )
+            }
+            app.runtimeController.execute(
+                RuntimeCommandRequest(
+                    executable = "/usr/bin/python3",
+                    arguments = listOf(
+                        "-m",
+                        "codex_gateway.supervisor_probe",
+                        "--codex",
+                        cli.guestExecutablePath,
+                        "--home",
+                        CodexRuntimePaths.GUEST_HOME,
+                        "--workdir",
+                        "/workspace",
+                    ),
+                    workingDirectory = gateway.guestPackageDirectory.substringBeforeLast("/codex_gateway"),
+                    timeoutMillis = APP_SERVER_SMOKE_TIMEOUT_MILLIS,
+                ),
+            ).thenCompose { result ->
+                val marker = result.standardOutput.toString(Charsets.UTF_8).trim()
+                if (result.exitCode == 0 && !result.timedOut && marker == "APP_SERVER_SMOKE_OK") {
+                    setAppServerSmoke(AppServerSmokeOutcome.READY)
+                    CompletableFuture.completedFuture(Unit)
+                } else {
+                    setAppServerSmoke(AppServerSmokeOutcome.INITIALIZE_OR_ACCOUNT_FAILED)
                     failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
                 }
             }
@@ -207,6 +270,10 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         _state.update { it.copy(codexCliBootstrap = outcome) }
     }
 
+    private fun setAppServerSmoke(outcome: AppServerSmokeOutcome) {
+        _state.update { it.copy(appServerSmoke = outcome) }
+    }
+
     private fun runOperation(
         pendingStatus: String,
         successStatus: String = "RUNTIME_OPERATION_COMPLETED",
@@ -230,6 +297,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             },
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                             codexCliBootstrap = current.codexCliBootstrap,
+                            appServerSmoke = current.appServerSmoke,
                         )
                     },
                     onFailure = { error ->
@@ -239,6 +307,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             errorCode = error.findRuntimeErrorCode(),
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                             codexCliBootstrap = current.codexCliBootstrap,
+                            appServerSmoke = current.appServerSmoke,
                         )
                     },
                 )
@@ -257,6 +326,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         errorCode: RuntimeErrorCode? = lastErrorCode ?: runtimeState.detailCode,
         gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
         codexCliBootstrap: CodexCliBootstrapOutcome? = null,
+        appServerSmoke: AppServerSmokeOutcome? = null,
     ) = RuntimeUiState(
         lifecycle = runtimeState.lifecycle,
         operation = operation,
@@ -266,6 +336,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         errorCode = errorCode,
         gatewayPythonBootstrap = gatewayPythonBootstrap,
         codexCliBootstrap = codexCliBootstrap,
+        appServerSmoke = appServerSmoke,
     )
 
     private fun Throwable.findRuntimeErrorCode(): RuntimeErrorCode = generateSequence(this) { it.cause }
@@ -281,6 +352,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         const val SMOKE_TIMEOUT_MILLIS = 15_000L
         const val PYTHON_BOOTSTRAP_TIMEOUT_MILLIS = 5 * 60_000L
         const val CODEX_CLI_VERSION_TIMEOUT_MILLIS = 30_000L
+        const val APP_SERVER_SMOKE_TIMEOUT_MILLIS = 60_000L
         const val GATEWAY_PYTHON_PACKAGE = "python3"
     }
 }
