@@ -295,10 +295,12 @@ val prepareCodexCliDebug by tasks.registering {
     }
 }
 
-// AGP 8.10 does not expose a preDebugBuild task for this library. Attach only to the
-// debug asset merge task; release variants neither invoke this task nor consume this source dir.
+// AGP 8.10 does not expose a preDebugBuild task for this library. Attach only to
+// debug consumers of the generated asset; release variants neither invoke this
+// task nor consume this source dir. Lint reads the debug asset source set when it
+// builds its model, so it must share the same explicit producer dependency.
 tasks.configureEach {
-    if (name == "mergeDebugAssets") {
+    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
         dependsOn(prepareCodexCliDebug)
     }
 }

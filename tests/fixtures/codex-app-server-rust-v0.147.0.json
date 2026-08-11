@@ -1,0 +1,24 @@
+{
+  "fixture_version": 1,
+  "codex_cli_version": "0.147.0",
+  "client_requests": [
+    "initialize",
+    "account/read",
+    "account/login/start",
+    "account/login/cancel",
+    "account/logout",
+    "model/list",
+    "thread/start",
+    "thread/resume",
+    "turn/start",
+    "turn/interrupt"
+  ],
+  "client_notifications": [
+    "initialized"
+  ],
+  "server_notifications": [
+    "account/login/completed",
+    "item/agentMessage/delta",
+    "turn/completed"
+  ]
+}

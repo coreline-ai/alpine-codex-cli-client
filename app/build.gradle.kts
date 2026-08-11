@@ -37,6 +37,10 @@ android {
         noCompress += "asset"
     }
 
+    sourceSets {
+        getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets/audit"))
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -50,6 +54,36 @@ android {
 
     lint {
         disable += "AndroidGradlePluginVersion"
+    }
+}
+
+val debugComponentInventory = layout.buildDirectory.file(
+    "generated/debug/assets/audit/META-INF/alpine-codex/debug-component-inventory.json",
+)
+
+val generateDebugComponentInventory by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Generates the debug-only component, license, and SBOM inventory asset."
+    inputs.file(rootProject.layout.projectDirectory.file("gradle/libs.versions.toml"))
+    inputs.file(rootProject.layout.projectDirectory.file("codex-cli-pack/codex-cli.lock.json"))
+    inputs.file(rootProject.layout.projectDirectory.file(
+        "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json",
+    ))
+    inputs.file(rootProject.layout.projectDirectory.file("scripts/generate-debug-component-inventory.py"))
+    outputs.file(debugComponentInventory)
+    commandLine(
+        "python3",
+        rootProject.layout.projectDirectory.file("scripts/generate-debug-component-inventory.py").asFile.absolutePath,
+        "--project-root",
+        rootProject.layout.projectDirectory.asFile.absolutePath,
+        "--output",
+        debugComponentInventory.get().asFile.absolutePath,
+    )
+}
+
+tasks.configureEach {
+    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
+        dependsOn(generateDebugComponentInventory)
     }
 }
 

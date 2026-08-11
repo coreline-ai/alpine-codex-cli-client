@@ -81,7 +81,7 @@ val prepareCodexGatewayDebug by tasks.registering {
 }
 
 tasks.configureEach {
-    if (name == "mergeDebugAssets") {
+    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
         dependsOn(prepareCodexGatewayDebug)
     }
 }
