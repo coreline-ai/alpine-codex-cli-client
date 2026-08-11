@@ -783,6 +783,8 @@ def serve(
         protocol.initialize("alpine-codex-client", "0.1.0-debug")
         service = CodexGatewayService(protocol, workspace_directory)
         server = LoopbackGatewayServer((LOOPBACK_HOST, port), make_handler(service))
+        # Consumed in memory by Android's lifecycle controller; it contains no account or chat data.
+        print("CODEX_GATEWAY_READY", flush=True)
         server.serve_forever(poll_interval=0.25)
     finally:
         if server is not None:

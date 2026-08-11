@@ -13,6 +13,7 @@ import dev.alpine.runtime.host.RuntimeHostOperation
 import dev.alpine.runtime.host.RuntimeHostState
 import dev.alpine.codexclient.cli.CodexCliArtifactException
 import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactException
+import dev.alpine.codexclient.bridge.CodexRuntimeLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +34,7 @@ data class RuntimeUiState(
     val gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
     val codexCliBootstrap: CodexCliBootstrapOutcome? = null,
     val appServerSmoke: AppServerSmokeOutcome? = null,
+    val gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
 )
 
 /** Closed state for the one fixed package bootstrap; guest output is never retained in UI state. */
@@ -73,8 +75,14 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                     gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                     codexCliBootstrap = current.codexCliBootstrap,
                     appServerSmoke = current.appServerSmoke,
+                    gatewayLifecycle = current.gatewayLifecycle,
                 )
             }
+        }
+    }
+    private val gatewayStateSubscription = app.codexRuntimeController.addStateListener { gatewayState ->
+        mainHandler.post {
+            _state.update { current -> current.copy(gatewayLifecycle = gatewayState.lifecycle) }
         }
     }
 
@@ -84,7 +92,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
 
     fun refresh() = runOperation("RUNTIME_HEALTH_CHECKING") { app.runtimeController.refreshHealth() }
 
-    fun stop() = runOperation("RUNTIME_STOPPING") { app.runtimeController.stop() }
+    fun stop() = runOperation("RUNTIME_STOPPING") { app.stopRuntime() }
 
     /**
      * Stages the checksum-pinned CLI and runs only its fixed `--version` argv inside Alpine.
@@ -298,6 +306,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                             codexCliBootstrap = current.codexCliBootstrap,
                             appServerSmoke = current.appServerSmoke,
+                            gatewayLifecycle = current.gatewayLifecycle,
                         )
                     },
                     onFailure = { error ->
@@ -308,6 +317,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                             codexCliBootstrap = current.codexCliBootstrap,
                             appServerSmoke = current.appServerSmoke,
+                            gatewayLifecycle = current.gatewayLifecycle,
                         )
                     },
                 )
@@ -317,6 +327,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         stateSubscription.close()
+        gatewayStateSubscription.close()
         super.onCleared()
     }
 
@@ -327,6 +338,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
         codexCliBootstrap: CodexCliBootstrapOutcome? = null,
         appServerSmoke: AppServerSmokeOutcome? = null,
+        gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
     ) = RuntimeUiState(
         lifecycle = runtimeState.lifecycle,
         operation = operation,
@@ -337,6 +349,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         gatewayPythonBootstrap = gatewayPythonBootstrap,
         codexCliBootstrap = codexCliBootstrap,
         appServerSmoke = appServerSmoke,
+        gatewayLifecycle = gatewayLifecycle,
     )
 
     private fun Throwable.findRuntimeErrorCode(): RuntimeErrorCode = generateSequence(this) { it.cause }

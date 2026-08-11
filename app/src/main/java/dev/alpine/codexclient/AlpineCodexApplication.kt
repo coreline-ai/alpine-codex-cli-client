@@ -19,6 +19,10 @@ import dev.alpine.codexclient.cli.CodexCliArtifactProvider
 import dev.alpine.codexclient.cli.StagedCodexCli
 import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactProvider
 import dev.alpine.codexclient.gatewaypack.StagedCodexGateway
+import dev.alpine.codexclient.bridge.CodexGatewayClient
+import dev.alpine.codexclient.bridge.CodexRuntimeController
+import dev.alpine.codexclient.bridge.GatewayArtifactStager
+import dev.alpine.codexclient.bridge.GatewayLaunchSpec
 import java.io.File
 
 class AlpineCodexApplication : Application() {
@@ -39,6 +43,8 @@ class AlpineCodexApplication : Application() {
     lateinit var codexCliArtifactProvider: CodexCliArtifactProvider
         private set
     lateinit var codexGatewayArtifactProvider: CodexGatewayArtifactProvider
+        private set
+    lateinit var codexRuntimeController: CodexRuntimeController
         private set
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
@@ -87,15 +93,24 @@ class AlpineCodexApplication : Application() {
         )
         codexCliArtifactProvider = CodexCliArtifactProvider(this)
         codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
+        codexRuntimeController = CodexRuntimeController(
+            runtimeHost = AndroidGatewayRuntimeHost(runtimeManager, runtimeController),
+            stager = GatewayArtifactStager(::stageGatewayLaunch),
+            gatewayClient = CodexGatewayClient(),
+            homeDirectory = CodexRuntimePaths.GUEST_HOME,
+        )
+        // This only probes an already-running app-private loopback gateway after process recovery.
+        codexRuntimeController.reconnectIfRuntimeActive()
         backgroundBinding = RuntimeBackgroundHostRegistry.bind {
-            runtimeManager.stop(RuntimeStopReason.USER_REQUEST)
+            codexRuntimeController.stop()
         }
     }
 
-    /** Starts every runtime session with a CLI-owned home inside this app-private workspace. */
-    fun startRuntime() = runtimeController.start(
-        RuntimeStartRequest(environment = mapOf("HOME" to CodexRuntimePaths.GUEST_HOME)),
-    )
+    /** Starts Runtime, stages verified assets, and launches the fixed loopback gateway in order. */
+    fun startRuntime() = codexRuntimeController.start()
+
+    /** Stops the gateway terminal before releasing the app-private Runtime session. */
+    fun stopRuntime() = codexRuntimeController.stop()
 
     /** Stages the debug-only official CLI before any app-server process can start. */
     fun stageCodexCli(): StagedCodexCli = codexCliArtifactProvider.stage(
@@ -109,6 +124,17 @@ class AlpineCodexApplication : Application() {
         guestGatewayDirectory = CodexRuntimePaths.GUEST_GATEWAY,
     )
 
+    private fun stageGatewayLaunch(): GatewayLaunchSpec {
+        val cli = stageCodexCli()
+        stageCodexGateway()
+        return GatewayLaunchSpec(
+            codexExecutable = cli.guestExecutablePath,
+            gatewayRootDirectory = CodexRuntimePaths.GUEST_GATEWAY,
+            homeDirectory = CodexRuntimePaths.GUEST_HOME,
+            workspaceDirectory = "/workspace",
+        )
+    }
+
     private fun ensurePrivateDirectory(directory: File): File {
         check(directory.exists() || directory.mkdirs()) {
             "cannot create app-private Codex workspace"
@@ -119,6 +145,7 @@ class AlpineCodexApplication : Application() {
     override fun onTerminate() {
         backgroundBinding?.close()
         backgroundController.stop()
+        codexRuntimeController.close()
         runtimeController.close()
         runtimeManager.close()
         super.onTerminate()

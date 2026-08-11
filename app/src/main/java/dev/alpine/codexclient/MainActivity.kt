@@ -58,6 +58,10 @@ private fun AlpineCodexClientApp(runtimeViewModel: RuntimeViewModel) {
                         text = "상태: ${state.status}",
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    Text(
+                        text = "Codex Gateway: ${state.gatewayLifecycle}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     state.errorCode?.let { errorCode ->
                         Text(
                             text = "오류: ${errorCode.name}",
