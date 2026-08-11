@@ -70,6 +70,12 @@ private fun AlpineCodexClientApp(runtimeViewModel: RuntimeViewModel) {
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                    state.codexCliBootstrap?.let { outcome ->
+                        Text(
+                            text = "Codex CLI 준비: ${outcome.name}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                     Button(
                         enabled = !state.busy && state.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.NOT_INSTALLED,
                         onClick = runtimeViewModel::install,
@@ -87,6 +93,12 @@ private fun AlpineCodexClientApp(runtimeViewModel: RuntimeViewModel) {
                         onClick = runtimeViewModel::runSmoke,
                     ) {
                         Text("Gateway Python 준비·smoke")
+                    }
+                    Button(
+                        enabled = !state.busy && state.sessionActive,
+                        onClick = runtimeViewModel::prepareCodexCli,
+                    ) {
+                        Text("Codex CLI 준비·검증")
                     }
                     OutlinedButton(
                         enabled = !state.busy,

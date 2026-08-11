@@ -15,6 +15,8 @@ import dev.alpine.runtime.pack.bundled.Alpine321Arm64Pack
 import dev.alpine.runtime.pack.bundled.BundledRuntimeArtifactProvider
 import dev.alpine.workspace.android.AppPrivateWorkspaceStore
 import dev.alpine.workspace.api.WorkspaceStore
+import dev.alpine.codexclient.cli.CodexCliArtifactProvider
+import dev.alpine.codexclient.cli.StagedCodexCli
 import java.io.File
 
 class AlpineCodexApplication : Application() {
@@ -31,6 +33,8 @@ class AlpineCodexApplication : Application() {
     lateinit var codexStagingDirectory: File
         private set
     lateinit var codexGatewayDirectory: File
+        private set
+    lateinit var codexCliArtifactProvider: CodexCliArtifactProvider
         private set
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
@@ -77,6 +81,7 @@ class AlpineCodexApplication : Application() {
         codexGatewayDirectory = ensurePrivateDirectory(
             File(codexWorkspaceDirectory, CodexRuntimePaths.GATEWAY_DIRECTORY),
         )
+        codexCliArtifactProvider = CodexCliArtifactProvider(this)
         backgroundBinding = RuntimeBackgroundHostRegistry.bind {
             runtimeManager.stop(RuntimeStopReason.USER_REQUEST)
         }
@@ -85,6 +90,12 @@ class AlpineCodexApplication : Application() {
     /** Starts every runtime session with a CLI-owned home inside this app-private workspace. */
     fun startRuntime() = runtimeController.start(
         RuntimeStartRequest(environment = mapOf("HOME" to CodexRuntimePaths.GUEST_HOME)),
+    )
+
+    /** Stages the debug-only official CLI before any app-server process can start. */
+    fun stageCodexCli(): StagedCodexCli = codexCliArtifactProvider.stage(
+        hostStagingDirectory = codexStagingDirectory,
+        guestStagingDirectory = CodexRuntimePaths.GUEST_STAGING,
     )
 
     private fun ensurePrivateDirectory(directory: File): File {

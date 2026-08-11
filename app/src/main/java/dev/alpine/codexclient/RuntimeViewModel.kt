@@ -11,6 +11,7 @@ import dev.alpine.runtime.api.RuntimeLifecycleState
 import dev.alpine.runtime.api.RuntimeOperationException
 import dev.alpine.runtime.host.RuntimeHostOperation
 import dev.alpine.runtime.host.RuntimeHostState
+import dev.alpine.codexclient.cli.CodexCliArtifactException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,7 @@ data class RuntimeUiState(
     val status: String = "RUNTIME_NOT_READY",
     val errorCode: RuntimeErrorCode? = null,
     val gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
+    val codexCliBootstrap: CodexCliBootstrapOutcome? = null,
 )
 
 /** Closed state for the one fixed package bootstrap; guest output is never retained in UI state. */
@@ -38,6 +40,13 @@ enum class GatewayPythonBootstrapOutcome {
     INSTALL_FAILED,
     INSTALLED,
     VERIFICATION_FAILED,
+}
+
+/** Closed result of staging and fixed-version verification for the official debug CLI. */
+enum class CodexCliBootstrapOutcome {
+    READY,
+    STAGING_FAILED,
+    VERSION_CHECK_FAILED,
 }
 
 class RuntimeViewModel(application: Application) : AndroidViewModel(application) {
@@ -53,6 +62,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                     busy = current.busy,
                     status = current.status,
                     gatewayPythonBootstrap = current.gatewayPythonBootstrap,
+                    codexCliBootstrap = current.codexCliBootstrap,
                 )
             }
         }
@@ -65,6 +75,48 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
     fun refresh() = runOperation("RUNTIME_HEALTH_CHECKING") { app.runtimeController.refreshHealth() }
 
     fun stop() = runOperation("RUNTIME_STOPPING") { app.runtimeController.stop() }
+
+    /**
+     * Stages the checksum-pinned CLI and runs only its fixed `--version` argv inside Alpine.
+     * The command output is compared in memory and is never rendered or logged.
+     */
+    fun prepareCodexCli() {
+        if (_state.value.busy || !_state.value.sessionActive) return
+        _state.update { it.copy(codexCliBootstrap = null) }
+        runOperation(
+            pendingStatus = "CODEX_CLI_STAGING",
+            successStatus = "CODEX_CLI_READY",
+        ) {
+            val staged = try {
+                app.stageCodexCli()
+            } catch (_: CodexCliArtifactException) {
+                setCodexCliBootstrap(CodexCliBootstrapOutcome.STAGING_FAILED)
+                return@runOperation failedStage<Unit>(
+                    RuntimeOperationException(RuntimeErrorCode.ARTIFACT_INTEGRITY_FAILED),
+                )
+            }
+            app.runtimeController.execute(
+                RuntimeCommandRequest(
+                    executable = staged.guestExecutablePath,
+                    arguments = listOf("--version"),
+                    timeoutMillis = CODEX_CLI_VERSION_TIMEOUT_MILLIS,
+                ),
+            ).thenCompose { result ->
+                val actualVersion = result.standardOutput
+                    .toString(Charsets.UTF_8)
+                    .lineSequence()
+                    .firstOrNull()
+                    ?.trim()
+                if (result.exitCode == 0 && !result.timedOut && actualVersion == "codex-cli ${staged.version}") {
+                    setCodexCliBootstrap(CodexCliBootstrapOutcome.READY)
+                    CompletableFuture.completedFuture(Unit)
+                } else {
+                    setCodexCliBootstrap(CodexCliBootstrapOutcome.VERSION_CHECK_FAILED)
+                    failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
+                }
+            }
+        }
+    }
 
     /**
      * User-initiated, fixed gateway bootstrap and smoke checks. Only exact `apk add` argv for
@@ -151,8 +203,13 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         _state.update { it.copy(gatewayPythonBootstrap = outcome) }
     }
 
+    private fun setCodexCliBootstrap(outcome: CodexCliBootstrapOutcome) {
+        _state.update { it.copy(codexCliBootstrap = outcome) }
+    }
+
     private fun runOperation(
         pendingStatus: String,
+        successStatus: String = "RUNTIME_OPERATION_COMPLETED",
         operation: () -> CompletionStage<*>,
     ) {
         if (_state.value.busy) return
@@ -169,9 +226,10 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             status = if (pendingStatus == "RUNTIME_SMOKE_RUNNING") {
                                 "RUNTIME_SMOKE_PASSED"
                             } else {
-                                "RUNTIME_OPERATION_COMPLETED"
+                                successStatus
                             },
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
+                            codexCliBootstrap = current.codexCliBootstrap,
                         )
                     },
                     onFailure = { error ->
@@ -180,6 +238,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             status = "RUNTIME_OPERATION_FAILED",
                             errorCode = error.findRuntimeErrorCode(),
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
+                            codexCliBootstrap = current.codexCliBootstrap,
                         )
                     },
                 )
@@ -197,6 +256,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         status: String = runtimeState.lifecycle.name,
         errorCode: RuntimeErrorCode? = lastErrorCode ?: runtimeState.detailCode,
         gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
+        codexCliBootstrap: CodexCliBootstrapOutcome? = null,
     ) = RuntimeUiState(
         lifecycle = runtimeState.lifecycle,
         operation = operation,
@@ -205,6 +265,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         status = status,
         errorCode = errorCode,
         gatewayPythonBootstrap = gatewayPythonBootstrap,
+        codexCliBootstrap = codexCliBootstrap,
     )
 
     private fun Throwable.findRuntimeErrorCode(): RuntimeErrorCode = generateSequence(this) { it.cause }
@@ -219,6 +280,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
     private companion object {
         const val SMOKE_TIMEOUT_MILLIS = 15_000L
         const val PYTHON_BOOTSTRAP_TIMEOUT_MILLIS = 5 * 60_000L
+        const val CODEX_CLI_VERSION_TIMEOUT_MILLIS = 30_000L
         const val GATEWAY_PYTHON_PACKAGE = "python3"
     }
 }

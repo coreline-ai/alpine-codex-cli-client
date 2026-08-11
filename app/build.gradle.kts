@@ -62,6 +62,7 @@ dependencies {
     implementation(project(":alpine-runtime-pack-bundled"))
     implementation(project(":alpine-workspace-api"))
     implementation(project(":alpine-workspace-android"))
+    implementation(project(":codex-cli-pack"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
