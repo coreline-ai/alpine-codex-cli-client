@@ -78,6 +78,12 @@ fun interface CodexRuntimeStateListener {
     fun onStateChanged(state: CodexRuntimeState)
 }
 
+/** Minimal lifecycle view consumed by the chat UI; test fakes cannot start a Runtime session. */
+interface CodexRuntimeStateSource {
+    fun currentState(): CodexRuntimeState
+    fun addStateListener(listener: CodexRuntimeStateListener): RuntimeSubscription
+}
+
 /**
  * Serializes Runtime → verified artifact staging → gateway terminal start. It never accepts a
  * command string, endpoint, environment map, token, or alternate backend from callers.
@@ -88,7 +94,7 @@ class CodexRuntimeController(
     private val gatewayClient: CodexGatewayClient,
     private val homeDirectory: String,
     private val gatewayReadyTimeoutMillis: Long = 30_000L,
-) : AutoCloseable {
+) : AutoCloseable, CodexRuntimeStateSource {
     private val lock = Any()
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "codex-runtime-bridge").apply { isDaemon = true }
@@ -109,9 +115,9 @@ class CodexRuntimeController(
         require(gatewayReadyTimeoutMillis > 0)
     }
 
-    fun currentState(): CodexRuntimeState = synchronized(lock) { state }
+    override fun currentState(): CodexRuntimeState = synchronized(lock) { state }
 
-    fun addStateListener(listener: CodexRuntimeStateListener): RuntimeSubscription {
+    override fun addStateListener(listener: CodexRuntimeStateListener): RuntimeSubscription {
         synchronized(lock) {
             listeners += listener
             listener.onStateChanged(state)

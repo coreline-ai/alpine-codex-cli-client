@@ -36,14 +36,14 @@ class CodexGatewayClientTest {
         listOf(
             Response.json("{\"runtime\":\"ready\",\"gateway\":\"ready\",\"codex\":\"ready\",\"ignored\":\"x\"}"),
             Response.json("{\"authenticated\":false,\"requires_openai_auth\":true}"),
-            Response.json("{\"login_id\":\"login-1\",\"verification_url\":\"https://example.invalid/device\",\"user_code\":\"TEST-CODE\"}"),
+            Response.json("{\"login_id\":\"login-1\",\"verification_url\":\"https://auth.openai.com/device\",\"user_code\":\"TEST-CODE\",\"expires_in_seconds\":600,\"poll_interval_seconds\":2}"),
             Response.json("{\"object\":\"list\",\"data\":[{\"id\":\"model-a\",\"display_name\":\"Model A\",\"is_default\":true}]}"),
         ),
     ).use { server ->
         val client = CodexGatewayClient()
         assertEquals("ready", client.health().codex)
         assertFalse(client.account().authenticated)
-        assertEquals("login-1", client.startDeviceLogin().loginId)
+        assertEquals(2, client.startDeviceLogin().pollIntervalSeconds)
         assertEquals(listOf("model-a"), client.models().map { it.id })
         assertEquals(
             listOf(

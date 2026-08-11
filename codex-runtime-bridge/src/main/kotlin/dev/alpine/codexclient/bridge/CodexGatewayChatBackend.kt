@@ -11,7 +11,12 @@ class CodexGatewayChatBackend(private val gatewayClient: CodexGatewayClient) {
     fun startTurn(request: GatewayChatRequest): CodexGatewayChatTurn {
         val control = gatewayClient.newStreamControl()
         return CodexGatewayChatTurn(
-            events = gatewayClient.stream(request, control).map(::toChatEvent),
+            events = gatewayClient.stream(request, control).map { event ->
+                // The production client observes this while parsing SSE. Keeping it at the
+                // dispatch boundary also preserves Stop for an in-process contract test double.
+                control.observeRequestId(event.id)
+                toChatEvent(event)
+            },
             stopAction = { control.stop(gatewayClient) },
         )
     }

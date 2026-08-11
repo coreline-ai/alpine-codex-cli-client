@@ -37,13 +37,24 @@ data class GatewayHealth(val runtime: String, val gateway: String, val codex: St
 
 data class GatewayAccount(val authenticated: Boolean, val requiresOpenaiAuth: Boolean)
 
-data class GatewayLoginStart(val loginId: String, val verificationUrl: String, val userCode: String)
+data class GatewayLoginStart(
+    val loginId: String,
+    val verificationUrl: String,
+    val userCode: String,
+    val expiresInSeconds: Int,
+    val pollIntervalSeconds: Int,
+)
 
 data class GatewayLoginStatus(val loginId: String, val status: String)
 
 data class GatewayModel(val id: String, val displayName: String, val isDefault: Boolean)
 
-data class GatewayChatRequest(val conversationId: String?, val model: String, val text: String)
+data class GatewayChatRequest(
+    val conversationId: String?,
+    val model: String,
+    val text: String,
+    val resumeExisting: Boolean = false,
+)
 
 data class GatewayStreamEvent(
     val id: String,
@@ -74,9 +85,9 @@ class GatewayStreamControl internal constructor() {
  * Bounded client for the one gateway address owned by this app. It has no configuration surface
  * for remote endpoints, headers, credentials, alternate transports, retries, or fallbacks.
  */
-class CodexGatewayClient {
+open class CodexGatewayClient {
 
-    fun health(): GatewayHealth {
+    open fun health(): GatewayHealth {
         val objectValue = getJson("/healthz")
         return GatewayHealth(
             runtime = objectValue.requiredString("runtime"),
@@ -85,7 +96,7 @@ class CodexGatewayClient {
         )
     }
 
-    fun account(): GatewayAccount {
+    open fun account(): GatewayAccount {
         val objectValue = getJson("/internal/codex/account")
         return GatewayAccount(
             authenticated = objectValue.requiredBoolean("authenticated"),
@@ -93,16 +104,18 @@ class CodexGatewayClient {
         )
     }
 
-    fun startDeviceLogin(): GatewayLoginStart {
+    open fun startDeviceLogin(): GatewayLoginStart {
         val objectValue = postJson("/internal/codex/login/device", null)
         return GatewayLoginStart(
             loginId = objectValue.requiredString("login_id"),
             verificationUrl = objectValue.requiredString("verification_url"),
             userCode = objectValue.requiredString("user_code"),
+            expiresInSeconds = objectValue.requiredPositiveInt("expires_in_seconds", MAX_LOGIN_EXPIRY_SECONDS),
+            pollIntervalSeconds = objectValue.requiredPositiveInt("poll_interval_seconds", MAX_LOGIN_POLL_SECONDS),
         )
     }
 
-    fun loginStatus(loginId: String): GatewayLoginStatus {
+    open fun loginStatus(loginId: String): GatewayLoginStatus {
         val objectValue = getJson("/internal/codex/login/${opaquePath(loginId)}")
         return GatewayLoginStatus(
             loginId = objectValue.requiredString("login_id"),
@@ -110,7 +123,7 @@ class CodexGatewayClient {
         )
     }
 
-    fun cancelLogin(loginId: String): GatewayLoginStatus {
+    open fun cancelLogin(loginId: String): GatewayLoginStatus {
         val objectValue = postJson("/internal/codex/login/${opaquePath(loginId)}/cancel", null)
         return GatewayLoginStatus(
             loginId = objectValue.requiredString("login_id"),
@@ -118,12 +131,12 @@ class CodexGatewayClient {
         )
     }
 
-    fun logout() {
+    open fun logout() {
         val status = postJson("/internal/codex/logout", null).requiredString("status")
         if (status != "logged_out") throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
     }
 
-    fun models(): List<GatewayModel> {
+    open fun models(): List<GatewayModel> {
         val objectValue = getJson("/v1/models")
         if (objectValue.requiredString("object") != "list") {
             throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
@@ -140,9 +153,9 @@ class CodexGatewayClient {
             }
     }
 
-    fun newStreamControl(): GatewayStreamControl = GatewayStreamControl()
+    open fun newStreamControl(): GatewayStreamControl = GatewayStreamControl()
 
-    fun stream(
+    open fun stream(
         request: GatewayChatRequest,
         control: GatewayStreamControl = newStreamControl(),
     ): Flow<GatewayStreamEvent> = flow {
@@ -162,6 +175,7 @@ class CodexGatewayClient {
             ),
         )
         request.conversationId?.let { values["conversation_id"] = JsonValue.StringValue(it) }
+        if (request.resumeExisting) values["resume_existing"] = JsonValue.BooleanValue(true)
         val body = BoundedJson.encode(JsonValue.ObjectValue(values))
         if (body.size > MAX_REQUEST_BYTES) throw GatewayClientException(GatewayClientErrorCode.REQUEST_TOO_LARGE)
         var connection: HttpURLConnection? = null
@@ -235,7 +249,7 @@ class CodexGatewayClient {
         }
     }
 
-    fun interrupt(requestId: String) {
+    open fun interrupt(requestId: String) {
         opaquePath(requestId)
         val status = postJson("/internal/codex/turn/$requestId/interrupt", null).requiredString("status")
         if (status != "interrupt_requested") throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
@@ -345,6 +359,9 @@ class CodexGatewayClient {
             throw GatewayClientException(GatewayClientErrorCode.REQUEST_TOO_LARGE)
         }
         request.conversationId?.let(::opaquePath)
+        if (request.resumeExisting && request.conversationId == null) {
+            throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
+        }
     }
 
     private fun opaquePath(value: String): String {
@@ -392,6 +409,8 @@ class CodexGatewayClient {
         const val MAX_RESPONSE_BYTES = 128 * 1024
         const val MAX_STREAM_EVENT_BYTES = 32 * 1024
         const val MAX_STREAM_BYTES = 512 * 1024
+        const val MAX_LOGIN_EXPIRY_SECONDS = 60 * 60
+        const val MAX_LOGIN_POLL_SECONDS = 60
         const val MAX_TEXT_BYTES = 16 * 1024
         val DATA_PREFIX = "data:".toByteArray(Charsets.US_ASCII)
         val COLON_PREFIX = ":".toByteArray(Charsets.US_ASCII)

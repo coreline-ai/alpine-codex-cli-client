@@ -11,11 +11,13 @@ import argparse
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import secrets
 import threading
 import time
 from typing import Any, Callable, Deque, Dict, Iterator, Optional, Tuple
+from urllib.parse import urlsplit
 
 from codex_gateway.app_server.process import AppServerSupervisor
 from codex_gateway.app_server.protocol import CodexAppServerProtocol, DeviceCodeLoginStart
@@ -31,6 +33,8 @@ MAX_MODEL_PAGES = 8
 MAX_CONVERSATIONS = 64
 MAX_LOGINS = 16
 LOGIN_TTL_SECONDS = 10 * 60
+LOGIN_POLL_INTERVAL_SECONDS = 2
+DEVICE_CODE_ALLOWED_HOSTS = frozenset({"auth.openai.com", "chatgpt.com"})
 MODEL_CACHE_SECONDS = 60.0
 TURN_TIMEOUT_SECONDS = 120.0
 
@@ -48,6 +52,7 @@ class GatewayError(Exception):
 class ChatRequest:
     request_id: str
     conversation_id: str
+    resume_existing: bool
     model: str
     text: str
 
@@ -87,14 +92,18 @@ class CodexGatewayService:
         protocol: CodexAppServerProtocol,
         workspace_directory: str,
         runtime_ready: Optional[Callable[[], bool]] = None,
+        conversation_store_path: Optional[str] = None,
     ) -> None:
         if not workspace_directory.startswith("/"):
             raise ValueError("workspace directory must be absolute")
         self._protocol = protocol
         self._workspace_directory = workspace_directory
         self._runtime_ready = runtime_ready or (lambda: True)
+        if conversation_store_path is not None and not conversation_store_path.startswith("/"):
+            raise ValueError("conversation store path must be absolute")
+        self._conversation_store_path = conversation_store_path
         self._lock = threading.RLock()
-        self._threads: "OrderedDict[str, str]" = OrderedDict()
+        self._threads = self._load_thread_bindings()
         self._logins: "OrderedDict[str, LoginRecord]" = OrderedDict()
         self._active_login_id: Optional[str] = None
         self._active_turn: Optional[ActiveTurn] = None
@@ -125,7 +134,7 @@ class CodexGatewayService:
             "requires_openai_auth": state.requires_openai_auth,
         }
 
-    def start_device_login(self) -> Dict[str, str]:
+    def start_device_login(self) -> Dict[str, Any]:
         if self._account_state().authenticated:
             raise GatewayError(409, "already_authenticated")
         with self._lock:
@@ -134,6 +143,8 @@ class CodexGatewayService:
                 raise GatewayError(409, "login_already_active")
         result = self._call(self._protocol.start_device_code_login)
         if not isinstance(result, DeviceCodeLoginStart):
+            raise GatewayError(502, "codex_protocol_invalid")
+        if not self._is_safe_device_challenge(result.verification_url, result.user_code):
             raise GatewayError(502, "codex_protocol_invalid")
         record = LoginRecord(
             login_id=result.login_id,
@@ -156,6 +167,8 @@ class CodexGatewayService:
             "verification_url": result.verification_url,
             "user_code": result.user_code,
             "status": "pending",
+            "expires_in_seconds": LOGIN_TTL_SECONDS,
+            "poll_interval_seconds": LOGIN_POLL_INTERVAL_SECONDS,
         }
 
     def login_status(self, login_id: str) -> Dict[str, str]:
@@ -193,6 +206,8 @@ class CodexGatewayService:
             self._logins.clear()
             self._model_cache = ()
             self._model_cache_expires = 0.0
+            self._threads.clear()
+            self._persist_thread_bindings_locked()
         return {"status": "logged_out"}
 
     def models(self) -> Dict[str, Any]:
@@ -218,7 +233,11 @@ class CodexGatewayService:
                 raise GatewayError(409, "turn_already_active")
             self._turn_reservation = True
         try:
-            thread_id = self._resolve_thread(request.conversation_id, request.model)
+            thread_id = self._resolve_thread(
+                request.conversation_id,
+                request.model,
+                request.resume_existing,
+            )
             active = ActiveTurn(
                 request_id=request.request_id,
                 conversation_id=request.conversation_id,
@@ -312,7 +331,7 @@ class CodexGatewayService:
                 active.condition.wait(min(remaining, 0.5))
             return active.events.popleft() if active.events else None
 
-    def _resolve_thread(self, conversation_id: str, model: str) -> str:
+    def _resolve_thread(self, conversation_id: str, model: str, resume_existing: bool) -> str:
         with self._lock:
             existing = self._threads.get(conversation_id)
         if existing is not None:
@@ -331,7 +350,12 @@ class CodexGatewayService:
                 raise GatewayError(502, "codex_protocol_invalid")
             with self._lock:
                 self._threads.move_to_end(conversation_id)
+                self._persist_thread_bindings_locked()
             return existing
+        if resume_existing:
+            # The Android side may retain an opaque conversation ID after a process death, but a
+            # missing gateway-owned binding must never create a replacement thread or replay text.
+            raise GatewayError(409, "conversation_binding_not_found")
         response = self._call(
             self._protocol.thread_start,
             {
@@ -348,6 +372,7 @@ class CodexGatewayService:
             self._threads.move_to_end(conversation_id)
             while len(self._threads) > MAX_CONVERSATIONS:
                 self._threads.popitem(last=False)
+            self._persist_thread_bindings_locked()
         return thread_id
 
     def _fetch_models(self) -> list[Dict[str, Any]]:
@@ -598,12 +623,24 @@ class CodexGatewayService:
         if len(text.encode("utf-8")) > MAX_MESSAGE_BYTES:
             raise GatewayError(413, "request_too_large")
         conversation = value.get("conversation_id")
-        if conversation is None:
+        generated_conversation = conversation is None
+        if generated_conversation:
             conversation = "conversation_" + secrets.token_hex(12)
         if not isinstance(conversation, str) or not conversation or len(conversation) > 128:
             raise GatewayError(400, "invalid_request")
+        resume_existing = value.get("resume_existing", False)
+        if not isinstance(resume_existing, bool):
+            raise GatewayError(400, "invalid_request")
+        if generated_conversation and resume_existing:
+            raise GatewayError(400, "invalid_request")
         request_id = "chat_" + secrets.token_hex(12)
-        return ChatRequest(request_id=request_id, conversation_id=conversation, model=model, text=text)
+        return ChatRequest(
+            request_id=request_id,
+            conversation_id=conversation,
+            resume_existing=resume_existing,
+            model=model,
+            text=text,
+        )
 
     def _expire_login_locked(self, now: float) -> None:
         active_id = self._active_login_id
@@ -621,6 +658,79 @@ class CodexGatewayService:
             old_id, _ = self._logins.popitem(last=False)
             if old_id == self._active_login_id:
                 self._active_login_id = None
+
+    def _load_thread_bindings(self) -> "OrderedDict[str, str]":
+        path = self._conversation_store_path
+        if path is None:
+            return OrderedDict()
+        try:
+            with open(path, "r", encoding="utf-8") as source:
+                raw = json.load(source)
+        except (OSError, ValueError, TypeError):
+            return OrderedDict()
+        if not isinstance(raw, list):
+            return OrderedDict()
+        values: "OrderedDict[str, str]" = OrderedDict()
+        for entry in raw[-MAX_CONVERSATIONS:]:
+            if not isinstance(entry, dict):
+                continue
+            conversation_id = entry.get("conversation_id")
+            thread_id = entry.get("thread_id")
+            if (
+                isinstance(conversation_id, str)
+                and 0 < len(conversation_id) <= 128
+                and isinstance(thread_id, str)
+                and 0 < len(thread_id) <= 4096
+            ):
+                values[conversation_id] = thread_id
+        return values
+
+    def _persist_thread_bindings_locked(self) -> None:
+        path = self._conversation_store_path
+        if path is None:
+            return
+        directory = os.path.dirname(path)
+        temporary = path + ".tmp-" + secrets.token_hex(8)
+        values = [
+            {"conversation_id": conversation_id, "thread_id": thread_id}
+            for conversation_id, thread_id in self._threads.items()
+        ]
+        try:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            with open(temporary, "w", encoding="utf-8") as destination:
+                os.chmod(temporary, 0o600)
+                json.dump(values, destination, separators=(",", ":"))
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary, path)
+        except OSError as error:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise GatewayError(503, "conversation_store_failed") from error
+
+    @staticmethod
+    def _is_safe_device_challenge(verification_url: Any, user_code: Any) -> bool:
+        if not isinstance(verification_url, str) or not isinstance(user_code, str):
+            return False
+        if not (0 < len(verification_url) <= 2048 and 0 < len(user_code) <= 64):
+            return False
+        if not all(character.isalnum() or character in "-_" for character in user_code):
+            return False
+        parsed = urlsplit(verification_url)
+        try:
+            port = parsed.port
+        except ValueError:
+            return False
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname in DEVICE_CODE_ALLOWED_HOSTS
+            and parsed.username is None
+            and parsed.password is None
+            and port in (None, 443)
+            and bool(parsed.path)
+        )
 
 
 def make_handler(service: CodexGatewayService):
@@ -781,7 +891,11 @@ def serve(
     try:
         protocol = CodexAppServerProtocol(supervisor)
         protocol.initialize("alpine-codex-client", "0.1.0-debug")
-        service = CodexGatewayService(protocol, workspace_directory)
+        service = CodexGatewayService(
+            protocol,
+            workspace_directory,
+            conversation_store_path=os.path.join(home_directory, "conversation-bindings.v1.json"),
+        )
         server = LoopbackGatewayServer((LOOPBACK_HOST, port), make_handler(service))
         # Consumed in memory by Android's lifecycle controller; it contains no account or chat data.
         print("CODEX_GATEWAY_READY", flush=True)

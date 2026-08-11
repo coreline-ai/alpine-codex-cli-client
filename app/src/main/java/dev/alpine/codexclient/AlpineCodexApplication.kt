@@ -20,6 +20,7 @@ import dev.alpine.codexclient.cli.StagedCodexCli
 import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactProvider
 import dev.alpine.codexclient.gatewaypack.StagedCodexGateway
 import dev.alpine.codexclient.bridge.CodexGatewayClient
+import dev.alpine.codexclient.bridge.CodexGatewayChatBackend
 import dev.alpine.codexclient.bridge.CodexRuntimeController
 import dev.alpine.codexclient.bridge.GatewayArtifactStager
 import dev.alpine.codexclient.bridge.GatewayLaunchSpec
@@ -45,6 +46,10 @@ class AlpineCodexApplication : Application() {
     lateinit var codexGatewayArtifactProvider: CodexGatewayArtifactProvider
         private set
     lateinit var codexRuntimeController: CodexRuntimeController
+        private set
+    lateinit var codexGatewayClient: CodexGatewayClient
+        private set
+    lateinit var codexChatBackend: CodexGatewayChatBackend
         private set
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
@@ -93,10 +98,12 @@ class AlpineCodexApplication : Application() {
         )
         codexCliArtifactProvider = CodexCliArtifactProvider(this)
         codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
+        codexGatewayClient = CodexGatewayClient()
+        codexChatBackend = CodexGatewayChatBackend(codexGatewayClient)
         codexRuntimeController = CodexRuntimeController(
             runtimeHost = AndroidGatewayRuntimeHost(runtimeManager, runtimeController),
             stager = GatewayArtifactStager(::stageGatewayLaunch),
-            gatewayClient = CodexGatewayClient(),
+            gatewayClient = codexGatewayClient,
             homeDirectory = CodexRuntimePaths.GUEST_HOME,
         )
         // This only probes an already-running app-private loopback gateway after process recovery.

@@ -3,7 +3,9 @@
 import http.client
 import json
 import os
+import stat
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -25,14 +27,18 @@ FAKE = os.path.join(ROOT, "tests", "fake_app_server.py")
 
 
 class GatewayHarness:
-    def __init__(self, mode: str) -> None:
+    def __init__(self, mode: str, conversation_store_path=None) -> None:
         self.supervisor = AppServerSupervisor(
             command=[sys.executable, "-u", FAKE, mode],
             working_directory=ROOT,
         )
         self.protocol = CodexAppServerProtocol(self.supervisor)
         self.protocol.initialize("alpine-codex-client", "gateway-test")
-        self.service = CodexGatewayService(self.protocol, ROOT)
+        self.service = CodexGatewayService(
+            self.protocol,
+            ROOT,
+            conversation_store_path=conversation_store_path,
+        )
         self.server = LoopbackGatewayServer((LOOPBACK_HOST, 0), make_handler(self.service))
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -142,6 +148,47 @@ class GatewayHttpTest(unittest.TestCase):
         )
         self.assertEqual(200, status)
         self.assertEqual("cancelled", cancelled["status"])
+
+    def test_device_login_rejects_an_unsafe_verification_url(self):
+        harness = self.open("gateway_login_unsafe")
+        status, error = harness.request("POST", "/internal/codex/login/device")
+        self.assertEqual(502, status)
+        self.assertEqual("codex_protocol_invalid", error["error"]["code"])
+
+    def test_gateway_owned_binding_survives_restart_and_logout_clears_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store_path = os.path.join(directory, "conversation-bindings.v1.json")
+            self.harness = GatewayHarness("gateway_chat", store_path)
+            connection, response = self.harness.start_stream(chat("conversation-persisted"))
+            self.assertEqual(200, response.status)
+            sse_values(response.read())
+            connection.close()
+            self.assertTrue(os.path.isfile(store_path))
+            self.assertEqual(0o600, stat.S_IMODE(os.stat(store_path).st_mode))
+            with open(store_path, "r", encoding="utf-8") as source:
+                bindings = json.load(source)
+            self.assertEqual(["conversation_id", "thread_id"], sorted(bindings[0].keys()))
+            self.harness.close()
+            self.harness = GatewayHarness("gateway_chat", store_path)
+            resume = chat("conversation-persisted")
+            resume["resume_existing"] = True
+            connection, response = self.harness.start_stream(resume)
+            self.assertEqual(200, response.status)
+            sse_values(response.read())
+            connection.close()
+            self.assertEqual(0, self.harness.query()["thread_start"])
+            self.assertEqual(1, self.harness.query()["thread_resume"])
+            missing = chat("conversation-missing")
+            missing["resume_existing"] = True
+            with self.assertRaises(GatewayError) as error:
+                self.harness.service.start_chat(missing)
+            self.assertEqual("conversation_binding_not_found", error.exception.code)
+            self.assertEqual(0, self.harness.query()["thread_start"])
+            status, logged_out = self.harness.request("POST", "/internal/codex/logout")
+            self.assertEqual(200, status)
+            self.assertEqual("logged_out", logged_out["status"])
+            with open(store_path, "r", encoding="utf-8") as source:
+                self.assertEqual([], json.load(source))
 
     def test_model_pagination_deduplication_empty_and_malformed(self):
         harness = self.open("gateway_auth")

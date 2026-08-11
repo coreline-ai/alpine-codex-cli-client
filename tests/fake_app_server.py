@@ -199,7 +199,10 @@ def handle(message):
         emit(response(request_id, gateway_account()))
         return True
     if method == "account/login/start":
-        emit(response(request_id, {"loginId": "login-gateway-1", "verificationUrl": "https://example.invalid/device", "userCode": "CODE-ONLY-TEST"}))
+        verification_url = "https://auth.openai.com/device"
+        if MODE == "gateway_login_unsafe":
+            verification_url = "https://auth.openai.com:444/device"
+        emit(response(request_id, {"loginId": "login-gateway-1", "verificationUrl": verification_url, "userCode": "CODE-ONLY-TEST"}))
         if MODE == "gateway_login_complete":
             complete_login_later()
         return True

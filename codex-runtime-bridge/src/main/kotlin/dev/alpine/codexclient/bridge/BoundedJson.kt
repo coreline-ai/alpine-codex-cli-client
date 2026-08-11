@@ -246,6 +246,10 @@ internal fun Map<String, JsonValue>.requiredBoolean(name: String): Boolean =
     (this[name] as? JsonValue.BooleanValue)?.value
         ?: throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
 
+internal fun Map<String, JsonValue>.requiredPositiveInt(name: String, maximum: Int): Int =
+    (this[name] as? JsonValue.NumberValue)?.value?.toIntOrNull()?.takeIf { it in 1..maximum }
+        ?: throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
+
 internal fun Map<String, JsonValue>.optionalString(name: String): String? = when (val value = this[name]) {
     null, JsonValue.NullValue -> null
     is JsonValue.StringValue -> value.value.takeIf { it.length <= 4096 }
