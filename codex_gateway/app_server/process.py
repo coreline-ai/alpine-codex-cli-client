@@ -133,6 +133,9 @@ class AppServerSupervisor:
                 timeout_seconds,
             )
             self._validate_initialize_response(response)
+            # The pinned app-server contract declares this post-initialize client notification.
+            # It has no parameters and carries no capability, credential, or account material.
+            self._write_stdin(b'{"jsonrpc":"2.0","method":"initialized"}\n')
         except RpcError as error:
             self._fail(error)
             raise SupervisorError("codex_initialize_failed") from error

@@ -1,7 +1,7 @@
 """Narrow, typed facade for only the Codex app-server methods required by this app."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .process import AppServerSupervisor
 
@@ -27,6 +27,16 @@ class CodexAppServerProtocol:
 
     def initialize(self, client_name: str, client_version: str) -> Dict[str, Any]:
         return self._supervisor.start(client_name, client_version)
+
+    @property
+    def is_ready(self) -> bool:
+        return self._supervisor.state.value == "READY"
+
+    def add_notification_listener(
+        self,
+        listener: Callable[[str, Dict[str, Any]], None],
+    ) -> Callable[[], None]:
+        return self._supervisor.add_notification_listener(listener)
 
     def account_read(self) -> AccountState:
         response = self._supervisor.request("account/read", {}, timeout_seconds=15.0)
