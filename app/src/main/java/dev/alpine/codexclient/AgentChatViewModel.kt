@@ -611,8 +611,20 @@ class AgentChatViewModel @JvmOverloads constructor(
         turn: AgentGatewayChatTurn,
     ) {
         if (event.agentId != _state.value.selectedAgentId || event.agentId != turn.agentId) {
-            setStableError(IllegalStateException("agent_event_mismatch"))
-            return
+            throw IllegalStateException("agent_event_mismatch")
+        }
+        val before = _state.value
+        when (event) {
+            is AgentTurnEvent.Started -> if (
+                before.connection != AgentConnectionState.GENERATING || before.activeRequestId != null
+            ) {
+                throw IllegalStateException("agent_event_order_invalid")
+            }
+            else -> if (
+                before.connection != AgentConnectionState.GENERATING || before.activeRequestId != event.requestId
+            ) {
+                throw IllegalStateException("agent_event_order_invalid")
+            }
         }
         when (event) {
             is AgentTurnEvent.Started -> {

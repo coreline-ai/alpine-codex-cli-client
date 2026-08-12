@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from enum import Enum
 import secrets
 import threading
 import time
@@ -31,7 +32,10 @@ MAX_LOGIN_RECORDS = 16
 MAX_CONVERSATIONS = 64
 MAX_MESSAGE_BYTES = 16 * 1024
 MAX_STREAM_TEXT_BYTES = 24 * 1024
+MAX_STREAM_TOTAL_BYTES = 256 * 1024
 MAX_STREAM_EVENTS = 128
+MAX_RETRY_ATTEMPTS = 32
+MAX_COMPLETED_TURN_IDS = 32
 GROK_AUTH_ALLOWED_HOSTS = frozenset({"auth.x.ai"})
 TERMINAL_LOGIN_STATES = frozenset({"authenticated", "failed", "cancelled", "expired"})
 
@@ -40,6 +44,26 @@ class GrokAdapterError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+class GrokRetryPolicy(str, Enum):
+    """Build-owned policy; it is never configurable through Android or HTTP."""
+
+    ALLOW_PRE_OUTPUT = "allow_pre_output"
+    STRICT = "strict"
+
+
+@dataclass(frozen=True)
+class GrokTurnMetrics:
+    """Content-free counters for the most recently completed Grok turn."""
+
+    prompt_dispatch_count: int
+    visible_delta_count: int
+    terminal_count: int
+    cancel_dispatch_count: int
+    retry_classification: str
+    retry_attempts: int
+    retry_max: int
 
 
 class _GrokSupervisor(Protocol):
@@ -109,6 +133,16 @@ class _GrokActiveTurn:
     events: Deque[AgentTurnEvent] = field(default_factory=lambda: deque(maxlen=MAX_STREAM_EVENTS))
     terminal: bool = False
     cancel_sent: bool = False
+    prompt_dispatch_count: int = 0
+    visible_delta_count: int = 0
+    terminal_count: int = 0
+    cancel_dispatch_count: int = 0
+    total_output_bytes: int = 0
+    retry_classification: str = "none"
+    retry_attempts: int = 0
+    retry_max: int = 0
+    last_notification_sequence: int = 0
+    prompt_id: Optional[str] = None
 
 
 class GrokAgentAdapter:
@@ -129,17 +163,24 @@ class GrokAgentAdapter:
         supervisor: Optional[_GrokSupervisor] = None,
         restored_bindings: Tuple[AgentConversationBinding, ...] = (),
         now: Callable[[], float] = time.monotonic,
+        retry_policy: GrokRetryPolicy = GrokRetryPolicy.ALLOW_PRE_OUTPUT,
     ) -> None:
         if not isinstance(workspace_directory, str) or not workspace_directory.startswith("/"):
             raise ValueError("Grok workspace directory must be absolute")
         self._workspace_directory = workspace_directory
+        if not isinstance(retry_policy, GrokRetryPolicy):
+            raise ValueError("invalid Grok retry policy")
         self._supervisor: _GrokSupervisor = supervisor or GrokAcpSupervisor()
         self._now = now
+        self._retry_policy = retry_policy
         self._lock = threading.RLock()
         self._login_sequence = 0
         self._logins: "OrderedDict[str, _LoginAttempt]" = OrderedDict()
         self._active_login_id: Optional[str] = None
         self._active_turn: Optional[_GrokActiveTurn] = None
+        self._completed_turn_ids: Deque[str] = deque(maxlen=MAX_COMPLETED_TURN_IDS)
+        self._completed_turn_id_set: set[str] = set()
+        self._last_turn_metrics: Optional[GrokTurnMetrics] = None
         self._models: Tuple[AgentModel, ...] = ()
         self._model_ids: set[str] = set()
         self._bindings: "OrderedDict[str, AgentConversationBinding]" = OrderedDict()
@@ -381,13 +422,13 @@ class GrokAgentAdapter:
 
     def stream(self, handle: AgentTurnHandle) -> Iterator[AgentTurnEvent]:
         active = self._active_handle(handle)
-        yield AgentTurnEvent(
-            agent_id=self.agent_id,
-            request_id=active.request_id,
-            event_type="start",
-            conversation_id=active.conversation_id,
-        )
         try:
+            yield AgentTurnEvent(
+                agent_id=self.agent_id,
+                request_id=active.request_id,
+                event_type="start",
+                conversation_id=active.conversation_id,
+            )
             while True:
                 with active.condition:
                     while not active.events:
@@ -399,7 +440,15 @@ class GrokAgentAdapter:
                 if event.event_type in ("done", "error"):
                     return
         finally:
+            should_cancel = False
+            with active.condition:
+                if not active.terminal:
+                    should_cancel = self._reserve_cancel_locked(active)
+            if should_cancel:
+                self._send_cancel(active, suppress_error=True)
+            self._remember_completed_turn(active.request_id)
             with self._lock:
+                self._last_turn_metrics = self._metrics(active)
                 if self._active_turn is active:
                     self._active_turn = None
 
@@ -407,13 +456,23 @@ class GrokAgentAdapter:
         self._identifier(request_id)
         with self._lock:
             active = self._active_turn
+            completed = request_id in self._completed_turn_id_set
+        if completed:
+            return
         if active is None or active.request_id != request_id:
             raise GrokAdapterError("turn_not_found")
         with active.condition:
-            if active.cancel_sent or active.terminal:
+            if active.terminal:
                 return
-            active.cancel_sent = True
-        self._supervisor.cancel_session(active.session_id)
+            should_cancel = self._reserve_cancel_locked(active)
+        if should_cancel:
+            self._send_cancel(active, suppress_error=False)
+
+    def turn_metrics(self) -> Optional[GrokTurnMetrics]:
+        """Return redacted counters only; no request, session, text, or retry reason."""
+
+        with self._lock:
+            return self._last_turn_metrics
 
     def conversation_bindings(self) -> Tuple[AgentConversationBinding, ...]:
         with self._lock:
@@ -504,6 +563,13 @@ class GrokAgentAdapter:
         return binding
 
     def _prompt_worker(self, active: _GrokActiveTurn, text: str) -> None:
+        with active.condition:
+            if active.terminal:
+                return
+            if active.prompt_dispatch_count != 0:
+                self._terminal_locked(active, "error", "grok_prompt_dispatch_duplicate")
+                return
+            active.prompt_dispatch_count = 1
         try:
             response = self._supervisor.prompt(active.session_id, text)
             reason = response.get("stopReason")
@@ -528,30 +594,16 @@ class GrokAgentAdapter:
         params = notification.params
         if params.get("sessionId") != active.session_id:
             return
+        with active.condition:
+            if active.terminal or notification.sequence <= active.last_notification_sequence:
+                return
+            active.last_notification_sequence = notification.sequence
+            if not self._bind_prompt_locked(active, params, notification.method):
+                return
         if notification.method == "session/update":
-            update = params.get("update")
-            if not isinstance(update, dict) or update.get("sessionUpdate") != "agent_message_chunk":
-                return
-            content = update.get("content")
-            text = content.get("text") if isinstance(content, dict) and content.get("type") == "text" else None
-            if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_STREAM_TEXT_BYTES:
-                with active.condition:
-                    self._terminal_locked(active, "error", "grok_notification_invalid")
-                return
-            with active.condition:
-                if active.terminal or len(active.events) == active.events.maxlen:
-                    if not active.terminal:
-                        self._terminal_locked(active, "error", "grok_stream_overflow")
-                    return
-                active.events.append(
-                    AgentTurnEvent(
-                        agent_id=self.agent_id,
-                        request_id=active.request_id,
-                        event_type="delta",
-                        text=text,
-                    )
-                )
-                active.condition.notify_all()
+            self._handle_content_update(active, params.get("update"))
+        elif notification.method in ("x.ai/session_notification", "_x.ai/session/update"):
+            self._handle_retry_update(active, params.get("update"))
         elif notification.method == "x.ai/session/prompt_complete":
             reason = params.get("stopReason")
             with active.condition:
@@ -562,6 +614,118 @@ class GrokAgentAdapter:
                 else:
                     self._terminal_locked(active, "error", "grok_turn_failed")
 
+    def _handle_content_update(self, active: _GrokActiveTurn, update: Any) -> None:
+        if not isinstance(update, dict) or update.get("sessionUpdate") != "agent_message_chunk":
+            return
+        content = update.get("content")
+        text = content.get("text") if isinstance(content, dict) and content.get("type") == "text" else None
+        if not isinstance(text, str):
+            self._fail_active(active, "grok_notification_invalid")
+            return
+        if not text:
+            return
+        text_bytes = len(text.encode("utf-8"))
+        if text_bytes > MAX_STREAM_TEXT_BYTES:
+            self._fail_active(active, "grok_stream_overflow")
+            return
+        with active.condition:
+            if active.terminal:
+                return
+            if (
+                active.total_output_bytes + text_bytes > MAX_STREAM_TOTAL_BYTES
+                or len(active.events) >= MAX_STREAM_EVENTS - 1
+            ):
+                should_cancel = self._reserve_cancel_locked(active)
+                self._terminal_locked(active, "error", "grok_stream_overflow")
+            else:
+                should_cancel = False
+                active.total_output_bytes += text_bytes
+                active.visible_delta_count += 1
+                active.events.append(
+                    AgentTurnEvent(
+                        agent_id=self.agent_id,
+                        request_id=active.request_id,
+                        event_type="delta",
+                        text=text,
+                    )
+                )
+                active.condition.notify_all()
+        if should_cancel:
+            self._send_cancel(active, suppress_error=True)
+
+    def _handle_retry_update(self, active: _GrokActiveTurn, update: Any) -> None:
+        if not isinstance(update, dict) or update.get("sessionUpdate") != "retry_state":
+            return
+        kind = update.get("type")
+        if kind == "retrying":
+            if set(update) != {"sessionUpdate", "type", "attempt", "max_retries", "reason"}:
+                self._fail_active(active, "grok_notification_invalid")
+                return
+            attempt = self._bounded_retry_integer(update.get("attempt"))
+            retry_max = self._bounded_retry_integer(update.get("max_retries"))
+            reason = update.get("reason")
+            if attempt is None or retry_max is None or attempt > retry_max or not self._bounded_private_text(reason):
+                self._fail_active(active, "grok_notification_invalid")
+                return
+            with active.condition:
+                if active.terminal:
+                    return
+                active.retry_attempts = max(active.retry_attempts, attempt)
+                active.retry_max = max(active.retry_max, retry_max)
+                if self._retry_policy is GrokRetryPolicy.STRICT:
+                    active.retry_classification = "strict_blocked"
+                    code = "grok_cli_retry_forbidden"
+                elif active.visible_delta_count > 0:
+                    active.retry_classification = "post_output"
+                    code = "grok_retry_after_output"
+                else:
+                    active.retry_classification = "pre_output"
+                    return
+            self._fail_active(active, code)
+            return
+        if kind == "exhausted":
+            if set(update) != {
+                "sessionUpdate",
+                "type",
+                "attempts",
+                "reason",
+                "is_rate_limited",
+            }:
+                self._fail_active(active, "grok_notification_invalid")
+                return
+            attempts = self._bounded_retry_integer(update.get("attempts"))
+            reason = update.get("reason")
+            rate_limited = update.get("is_rate_limited")
+            if attempts is None or not self._bounded_private_text(reason) or not isinstance(rate_limited, bool):
+                self._fail_active(active, "grok_notification_invalid")
+                return
+            with active.condition:
+                if active.terminal:
+                    return
+                active.retry_classification = "exhausted"
+                active.retry_attempts = max(active.retry_attempts, attempts)
+            self._fail_active(active, "grok_retry_exhausted")
+            return
+        if kind == "failed":
+            if set(update) != {"sessionUpdate", "type", "error_type", "message"}:
+                self._fail_active(active, "grok_notification_invalid")
+                return
+            error_type = update.get("error_type")
+            message = update.get("message")
+            if not self._bounded_private_text(error_type, maximum=64) or not self._bounded_private_text(message):
+                self._fail_active(active, "grok_notification_invalid")
+                return
+            with active.condition:
+                if active.terminal:
+                    return
+                active.retry_classification = "auth_failed" if error_type == "auth" else "failed"
+            self._fail_active(
+                active,
+                "grok_auth_recovery_failed" if error_type == "auth" else "grok_retry_failed",
+            )
+            return
+        self._fail_active(active, "grok_notification_invalid")
+
     def _terminal_locked(
         self,
         active: _GrokActiveTurn,
@@ -571,6 +735,7 @@ class GrokAgentAdapter:
         if active.terminal:
             return
         active.terminal = True
+        active.terminal_count += 1
         active.events.append(
             AgentTurnEvent(
                 agent_id=self.agent_id,
@@ -580,6 +745,85 @@ class GrokAgentAdapter:
             )
         )
         active.condition.notify_all()
+        self._remember_completed_turn(active.request_id)
+
+    def _remember_completed_turn(self, request_id: str) -> None:
+        with self._lock:
+            if request_id not in self._completed_turn_id_set:
+                if len(self._completed_turn_ids) == self._completed_turn_ids.maxlen:
+                    expired = self._completed_turn_ids.popleft()
+                    self._completed_turn_id_set.discard(expired)
+                self._completed_turn_ids.append(request_id)
+                self._completed_turn_id_set.add(request_id)
+
+    def _fail_active(self, active: _GrokActiveTurn, code: str) -> None:
+        with active.condition:
+            if active.terminal:
+                return
+            should_cancel = self._reserve_cancel_locked(active)
+            self._terminal_locked(active, "error", code)
+        if should_cancel:
+            self._send_cancel(active, suppress_error=True)
+
+    @staticmethod
+    def _reserve_cancel_locked(active: _GrokActiveTurn) -> bool:
+        if active.cancel_sent:
+            return False
+        active.cancel_sent = True
+        active.cancel_dispatch_count += 1
+        return True
+
+    def _send_cancel(self, active: _GrokActiveTurn, *, suppress_error: bool) -> None:
+        try:
+            self._supervisor.cancel_session(active.session_id)
+        except Exception as error:
+            if not suppress_error:
+                raise GrokAdapterError("grok_cancel_failed") from error
+
+    @staticmethod
+    def _bind_prompt_locked(
+        active: _GrokActiveTurn,
+        params: Dict[str, Any],
+        method: str,
+    ) -> bool:
+        meta = params.get("_meta")
+        if meta is not None and not isinstance(meta, dict):
+            return False
+        if isinstance(meta, dict) and meta.get("isReplay") is True:
+            return False
+        prompt_id = params.get("promptId") if method == "x.ai/session/prompt_complete" else None
+        if prompt_id is None and isinstance(meta, dict):
+            prompt_id = meta.get("promptId")
+        if prompt_id is None:
+            return True
+        if not isinstance(prompt_id, str) or not prompt_id or len(prompt_id) > 512:
+            return False
+        if active.prompt_id is None:
+            active.prompt_id = prompt_id
+            return True
+        return active.prompt_id == prompt_id
+
+    @staticmethod
+    def _bounded_retry_integer(value: Any) -> Optional[int]:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_RETRY_ATTEMPTS:
+            return None
+        return value
+
+    @staticmethod
+    def _bounded_private_text(value: Any, *, maximum: int = 2048) -> bool:
+        return isinstance(value, str) and 0 < len(value) <= maximum
+
+    @staticmethod
+    def _metrics(active: _GrokActiveTurn) -> GrokTurnMetrics:
+        return GrokTurnMetrics(
+            prompt_dispatch_count=active.prompt_dispatch_count,
+            visible_delta_count=active.visible_delta_count,
+            terminal_count=active.terminal_count,
+            cancel_dispatch_count=active.cancel_dispatch_count,
+            retry_classification=active.retry_classification,
+            retry_attempts=active.retry_attempts,
+            retry_max=active.retry_max,
+        )
 
     def _active_handle(self, handle: AgentTurnHandle) -> _GrokActiveTurn:
         if handle.agent_id != self.agent_id or not isinstance(handle._native_handle, _GrokActiveTurn):

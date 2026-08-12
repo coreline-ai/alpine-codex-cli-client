@@ -10,6 +10,7 @@ import unittest
 
 from codex_gateway.grok_acp.contract import (
     AUTH_METHOD_ID,
+    NOTIFICATION_METHODS,
     REQUEST_METHODS,
     _RequestMethod,
     parse_initialize_result,
@@ -62,6 +63,7 @@ class GrokContractTest(unittest.TestCase):
     def test_contract_is_closed_and_forbidden_strings_never_reach_writer(self):
         fixture = json.loads(FIXTURE_PATH.read_text())
         self.assertEqual(set(fixture["allowedRequestMethods"]), set(REQUEST_METHODS))
+        self.assertEqual(set(fixture["allowedNotificationMethods"]), set(NOTIFICATION_METHODS))
         writes = []
         rpc = _AcpMultiplexer(writes.append, generation=1)
         for method in fixture["forbiddenRequestMethods"]:
@@ -147,6 +149,30 @@ class GrokMultiplexerTest(unittest.TestCase):
         self.assertEqual(4, notifications[0].generation)
         self.assertEqual(1, rpc.stale_generation_count)
         self.assertEqual(1, rpc.discarded_notification_count)
+
+    def test_official_xai_retry_notification_is_allowlisted_and_bounded(self):
+        rpc = _AcpMultiplexer(lambda _: None, generation=5)
+        notifications = []
+        rpc.add_notification_listener(notifications.append)
+        rpc.handle_object(
+            {
+                "jsonrpc": "2.0",
+                "method": "x.ai/session_notification",
+                "params": {
+                    "sessionId": "session-1",
+                    "update": {
+                        "sessionUpdate": "retry_state",
+                        "type": "retrying",
+                        "attempt": 1,
+                        "max_retries": 3,
+                        "reason": "fixture",
+                    },
+                },
+            },
+            generation=5,
+        )
+        self.assertEqual(1, len(notifications))
+        self.assertEqual("x.ai/session_notification", notifications[0].method)
 
 
 class GrokSupervisorTest(unittest.TestCase):

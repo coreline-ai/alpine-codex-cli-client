@@ -12,7 +12,7 @@ from codex_gateway.agents.contracts import AgentConversationBinding, AgentId
 from codex_gateway.agents.router import AgentRouter
 from codex_gateway.agents.service import AgentGatewayService
 from codex_gateway.gateway import LOOPBACK_HOST, LoopbackGatewayServer
-from tests.test_grok_agent_adapter import FakeGrokSupervisor, chat
+from tests.test_grok_agent_adapter import FakeGrokSupervisor, agent_chunk, chat, retry_state
 
 
 def sse_values(raw):
@@ -172,6 +172,13 @@ class AgentGatewayHttpTest(unittest.TestCase):
         ])
         self.assertEqual(1, len(self.harness.supervisor.new_session_calls))
         self.assertEqual(1, len(self.harness.supervisor.prompt_calls))
+        turn_id = values[0]["id"]
+        status, stopped_after_done = self.harness.request(
+            "POST", f"/internal/agents/grok/turn/{turn_id}/interrupt"
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("interrupt_requested", stopped_after_done["status"])
+        self.assertEqual([], self.harness.supervisor.cancel_session_calls)
 
         self.harness.supervisor.auth_info_payload = {
             "email": "private@example.invalid",
@@ -249,6 +256,65 @@ class AgentGatewayHttpTest(unittest.TestCase):
             self.assertEqual([], stale.supervisor.prompt_calls)
         finally:
             stale.close()
+
+    def test_pre_output_cli_retry_keeps_one_gateway_dispatch_and_normalized_sse(self):
+        self.harness.supervisor.authenticated = True
+
+        def prompt(session_id, text):
+            self.harness.supervisor.prompt_calls.append((session_id, text))
+            self.harness.supervisor.emit(
+                "x.ai/session_notification",
+                retry_state(
+                    {
+                        "type": "retrying",
+                        "attempt": 1,
+                        "max_retries": 3,
+                        "reason": "private fixture detail",
+                    }
+                ),
+            )
+            self.harness.supervisor.emit("session/update", agent_chunk(""))
+            self.harness.supervisor.emit("session/update", agent_chunk("visible fixture"))
+            return {"stopReason": "end_turn"}
+
+        self.harness.supervisor.prompt = prompt
+        status, values = self.harness.stream(chat())
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["start", "delta", "done", "[DONE]"],
+            [item if isinstance(item, str) else item["type"] for item in values],
+        )
+        self.assertEqual(1, len(self.harness.supervisor.prompt_calls))
+        self.assertEqual("pre_output", self.harness.adapter.turn_metrics().retry_classification)
+
+    def test_retry_exhaustion_emits_one_terminal_error_without_replay_or_fallback(self):
+        self.harness.supervisor.authenticated = True
+
+        def prompt(session_id, text):
+            self.harness.supervisor.prompt_calls.append((session_id, text))
+            self.harness.supervisor.emit(
+                "x.ai/session_notification",
+                retry_state(
+                    {
+                        "type": "exhausted",
+                        "attempts": 4,
+                        "reason": "private fixture detail",
+                        "is_rate_limited": False,
+                    }
+                ),
+            )
+            return {"stopReason": "end_turn"}
+
+        self.harness.supervisor.prompt = prompt
+        status, values = self.harness.stream(chat())
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["start", "error", "[DONE]"],
+            [item if isinstance(item, str) else item["type"] for item in values],
+        )
+        self.assertEqual("grok_retry_exhausted", values[1]["code"])
+        self.assertEqual(1, len(self.harness.supervisor.prompt_calls))
+        self.assertEqual(["session-1"], self.harness.supervisor.cancel_session_calls)
 
 
 if __name__ == "__main__":

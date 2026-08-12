@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -42,16 +41,31 @@ data class AgentGatewayChatRequest(
 
 /** One-shot Stop state is bound to one Agent before the first SSE event arrives. */
 class AgentGatewayStreamControl internal constructor(private val agentId: AgentId) {
-    private val stopped = AtomicBoolean(false)
-    @Volatile private var requestId: String? = null
+    private var stopped = false
+    private var terminal = false
+    private var requestId: String? = null
 
+    @Synchronized
     internal fun observeRequestId(value: String) {
-        if (requestId == null) requestId = value
+        val current = requestId
+        if (current == null) {
+            requestId = value
+        } else if (current != value) {
+            throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
+        }
     }
 
+    @Synchronized
+    internal fun markTerminal(value: String) {
+        observeRequestId(value)
+        terminal = true
+    }
+
+    @Synchronized
     fun stop(client: AgentGatewayClient): Boolean {
         val id = requestId ?: return false
-        if (!stopped.compareAndSet(false, true)) return false
+        if (terminal || stopped) return false
+        stopped = true
         client.interrupt(agentId, id)
         return true
     }
@@ -215,6 +229,8 @@ open class AgentGatewayClient {
             }
             val dataLines = mutableListOf<ByteArray>()
             var totalBytes = 0
+            var started = false
+            var terminal = false
             connection.inputStream.use { input ->
                 while (true) {
                     val line = readLine(input, MAX_STREAM_EVENT_BYTES) ?: break
@@ -225,11 +241,27 @@ open class AgentGatewayClient {
                         dataLines.clear()
                         if (event == null) continue
                         if (event.contentEquals(DONE_MARKER)) {
+                            if (!terminal) failure(GatewayClientErrorCode.MALFORMED_SSE)
                             completed = true
                             break
                         }
                         val parsed = parseStreamEvent(event, request.agentId)
+                        if (terminal) failure(GatewayClientErrorCode.MALFORMED_SSE)
                         control.observeRequestId(parsed.requestId)
+                        when (parsed) {
+                            is AgentTurnEvent.Started -> {
+                                if (started) failure(GatewayClientErrorCode.MALFORMED_SSE)
+                                started = true
+                            }
+                            is AgentTurnEvent.Delta -> {
+                                if (!started) failure(GatewayClientErrorCode.MALFORMED_SSE)
+                            }
+                            is AgentTurnEvent.Completed, is AgentTurnEvent.Failed -> {
+                                if (!started) failure(GatewayClientErrorCode.MALFORMED_SSE)
+                                terminal = true
+                                control.markTerminal(parsed.requestId)
+                            }
+                        }
                         emit(parsed)
                     } else if (line.hasPrefix(DATA_PREFIX)) {
                         val data = line.copyOfRange(DATA_PREFIX.size, line.size).dropLeadingSpace()

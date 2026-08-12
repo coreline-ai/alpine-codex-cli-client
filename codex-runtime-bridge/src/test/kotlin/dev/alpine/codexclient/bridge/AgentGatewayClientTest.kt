@@ -35,7 +35,6 @@ class AgentGatewayClientTest {
                     "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"done\"}\n\n" +
                     "data: [DONE]\n\n",
             ),
-            Response.json("""{"agent_id":"grok","id":"turn-1","status":"interrupt_requested"}"""),
             Response.json("""{"agent_id":"grok","status":"cancelled","request_id":"login-recovered"}"""),
             Response.json("""{"agent_id":"grok","status":"logged_out"}"""),
         ),
@@ -60,7 +59,6 @@ class AgentGatewayClientTest {
         }
         assertEquals(3, events.size)
         assertTrue(events.all { it.agentId == AgentId.GROK })
-        assertTrue(control.stop(client))
         assertFalse(control.stop(client))
         client.cancelActiveDeviceLogin(AgentId.GROK)
         client.logout(AgentId.GROK)
@@ -75,7 +73,6 @@ class AgentGatewayClientTest {
                 "GET /internal/agents/grok/login/login-1",
                 "GET /v1/models",
                 "POST /v1/chat/completions",
-                "POST /internal/agents/grok/turn/turn-1/interrupt",
                 "POST /internal/agents/grok/login/active/cancel",
                 "POST /internal/agents/grok/logout",
             ),
@@ -112,6 +109,73 @@ class AgentGatewayClientTest {
             }
             assertEquals(GatewayClientErrorCode.MALFORMED_RESPONSE, error.errorCode)
         }
+    }
+
+    @Test
+    fun `SSE requires one start one request identity one terminal then done marker`() {
+        val invalidStreams = listOf(
+            "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"delta\",\"text\":\"early\"}\n\n" +
+                "data: [DONE]\n\n",
+            "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\"}\n\n" +
+                "data: {\"id\":\"turn-2\",\"agent_id\":\"grok\",\"type\":\"delta\",\"text\":\"wrong\"}\n\n",
+            "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\"}\n\n" +
+                "data: [DONE]\n\n",
+            "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\"}\n\n" +
+                "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"done\"}\n\n" +
+                "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"done\"}\n\n" +
+                "data: [DONE]\n\n",
+        )
+        invalidStreams.forEach { stream ->
+            FakeAgentServer(
+                listOf(
+                    Response.sse(stream),
+                    Response.json("""{"agent_id":"grok","id":"turn-1","status":"interrupt_requested"}"""),
+                ),
+            ).use { server ->
+                val error = assertThrows(GatewayClientException::class.java) {
+                    runBlocking {
+                        AgentGatewayClient().stream(
+                            AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "fixture"),
+                        ).toList()
+                    }
+                }
+                assertTrue(
+                    error.errorCode in setOf(
+                        GatewayClientErrorCode.MALFORMED_RESPONSE,
+                        GatewayClientErrorCode.MALFORMED_SSE,
+                    ),
+                )
+                assertEquals(1, server.requests.count { it == "POST /v1/chat/completions" })
+            }
+        }
+    }
+
+    @Test
+    fun `incomplete stream dispatches one exact interrupt and never replays prompt`() = FakeAgentServer(
+        listOf(
+            Response.sse(
+                "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\"}\n\n" +
+                    "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"delta\",\"text\":\"partial\"}\n\n",
+            ),
+            Response.json("""{"agent_id":"grok","id":"turn-1","status":"interrupt_requested"}"""),
+        ),
+    ).use { server ->
+        val error = assertThrows(GatewayClientException::class.java) {
+            runBlocking {
+                AgentGatewayClient().stream(
+                    AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "one user prompt"),
+                ).toList()
+            }
+        }
+        assertEquals(GatewayClientErrorCode.MALFORMED_SSE, error.errorCode)
+        assertEquals(
+            listOf(
+                "POST /v1/chat/completions",
+                "POST /internal/agents/grok/turn/turn-1/interrupt",
+            ),
+            server.requests,
+        )
+        assertEquals(1, server.bodies.count { it.contains("\"content\":\"one user prompt\"") })
     }
 
     private data class Response(val status: Int, val contentType: String, val body: ByteArray) {

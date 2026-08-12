@@ -21,6 +21,7 @@
   "allowedNotificationMethods": [
     "_x.ai/session/update",
     "session/update",
+    "x.ai/session_notification",
     "x.ai/session/prompt_complete"
   ],
   "forbiddenRequestMethods": [

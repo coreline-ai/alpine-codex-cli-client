@@ -42,6 +42,7 @@ NOTIFICATION_METHODS = frozenset(
     {
         "session/update",
         "_x.ai/session/update",
+        "x.ai/session_notification",
         "x.ai/session/prompt_complete",
     }
 )

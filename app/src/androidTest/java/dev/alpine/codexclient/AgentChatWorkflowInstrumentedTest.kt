@@ -273,6 +273,106 @@ class AgentChatWorkflowInstrumentedTest {
         assertNull(viewModel.state.value.login)
     }
 
+    @Test
+    fun partialFailureKeepsOneUserOneAssistantAndRecreationNeverReplays() {
+        val gateway = FakeAgentGatewayClient().apply { approve(AgentId.CODEX) }
+        val viewModel = onMain {
+            AgentChatViewModel(
+                application,
+                FakeRuntimeStateSource(),
+                gateway,
+                AgentGatewayChatBackend(gateway),
+            )
+        }
+        awaitState(viewModel) { it.connection == AgentConnectionState.READY }
+        gateway.failAfterPartialNextTurn()
+        onMain {
+            viewModel.updateDraft("one fixture request")
+            viewModel.send()
+        }
+        awaitState(viewModel) {
+            it.connection == AgentConnectionState.STABLE_ERROR && it.stableErrorCode == "grok_retry_after_output"
+        }
+        assertEquals(2, viewModel.state.value.messages.size)
+        assertEquals(ChatRole.USER, viewModel.state.value.messages[0].role)
+        assertEquals(ChatRole.ASSISTANT, viewModel.state.value.messages[1].role)
+        assertEquals("partial fixture", viewModel.state.value.messages[1].text)
+        assertEquals(1, gateway.sentRequests.size)
+        Thread.sleep(100L)
+        assertEquals(1, gateway.sentRequests.size)
+
+        val recreatedGateway = FakeAgentGatewayClient().apply { approve(AgentId.CODEX) }
+        val recreated = onMain {
+            AgentChatViewModel(
+                application,
+                FakeRuntimeStateSource(),
+                recreatedGateway,
+                AgentGatewayChatBackend(recreatedGateway),
+            )
+        }
+        awaitState(recreated) { it.connection == AgentConnectionState.READY }
+        assertEquals(2, recreated.state.value.messages.size)
+        assertTrue(recreatedGateway.sentRequests.isEmpty())
+    }
+
+    @Test
+    fun mismatchedTurnRequestIdFailsClosedAndCannotBeOverwrittenByLateCompletion() {
+        val gateway = FakeAgentGatewayClient().apply { approve(AgentId.CODEX) }
+        val viewModel = onMain {
+            AgentChatViewModel(
+                application,
+                FakeRuntimeStateSource(),
+                gateway,
+                AgentGatewayChatBackend(gateway),
+            )
+        }
+        awaitState(viewModel) { it.connection == AgentConnectionState.READY }
+        gateway.mismatchNextTurnRequestId()
+        onMain {
+            viewModel.updateDraft("one malformed fixture")
+            viewModel.send()
+        }
+        awaitState(viewModel) {
+            it.connection == AgentConnectionState.STABLE_ERROR &&
+                it.stableErrorCode == "MALFORMED_RESPONSE"
+        }
+        Thread.sleep(100L)
+        assertEquals(AgentConnectionState.STABLE_ERROR, viewModel.state.value.connection)
+        assertEquals(2, viewModel.state.value.messages.size)
+        assertEquals(1, gateway.sentRequests.size)
+    }
+
+    @Test
+    fun stopBeforeStartAckIsQueuedThenSentExactlyOnceForTheBoundRequest() {
+        val gateway = FakeAgentGatewayClient().apply { approve(AgentId.CODEX) }
+        val viewModel = onMain {
+            AgentChatViewModel(
+                application,
+                FakeRuntimeStateSource(),
+                gateway,
+                AgentGatewayChatBackend(gateway),
+            )
+        }
+        awaitState(viewModel) { it.connection == AgentConnectionState.READY }
+        gateway.delayAndBlockNextTurn()
+        onMain {
+            viewModel.updateDraft("one queued stop fixture")
+            viewModel.send()
+            viewModel.stopGeneration()
+        }
+        awaitState(viewModel) {
+            it.connection == AgentConnectionState.GENERATING &&
+                it.stopRequested && it.activeRequestId == null
+        }
+        assertNull(gateway.interrupts[AgentId.CODEX])
+        gateway.releaseDelayedStart()
+        awaitState(viewModel) {
+            it.connection == AgentConnectionState.STABLE_ERROR && it.stableErrorCode == "turn_interrupted"
+        }
+        assertEquals(1, gateway.interrupts[AgentId.CODEX])
+        assertEquals(1, gateway.sentRequests.size)
+    }
+
     private fun <T> onMain(block: () -> T): T {
         var value: T? = null
         InstrumentationRegistry.getInstrumentation().runOnMainSync { value = block() }
@@ -303,6 +403,8 @@ class AgentChatWorkflowInstrumentedTest {
     }
 
     private class FakeAgentGatewayClient : AgentGatewayClient() {
+        private enum class TurnMode { NORMAL, FAIL_AFTER_PARTIAL, MISMATCH_REQUEST_ID }
+
         @Volatile var selectedAgent: AgentId = AgentId.CODEX
         val loginStarts = mutableMapOf<AgentId, Int>()
         val sentRequests = mutableListOf<AgentGatewayChatRequest>()
@@ -312,6 +414,9 @@ class AgentChatWorkflowInstrumentedTest {
         var omitNextCodexCode = false
         private val authenticated = mutableMapOf(AgentId.CODEX to false, AgentId.GROK to false)
         @Volatile private var blockNext = false
+        @Volatile private var delayStartNext = false
+        @Volatile private var startRelease = CompletableDeferred<Unit>().apply { complete(Unit) }
+        @Volatile private var nextTurnMode = TurnMode.NORMAL
         @Volatile private var stopSignal: CompletableDeferred<Unit>? = null
 
         private val capabilities = AgentCapabilities(true, true, true, true, true)
@@ -386,16 +491,36 @@ class AgentChatWorkflowInstrumentedTest {
             sentRequests += request
             val requestId = "${request.agentId.wireValue}-turn-${sentRequests.size}"
             val conversationId = "${request.agentId.wireValue}-conversation-${sentRequests.size}"
+            val mode = nextTurnMode.also { nextTurnMode = TurnMode.NORMAL }
+            val shouldBlock = blockNext.also { blockNext = false }
+            val signal = if (shouldBlock) {
+                CompletableDeferred<Unit>().also { stopSignal = it }
+            } else {
+                null
+            }
+            if (delayStartNext) {
+                delayStartNext = false
+                startRelease.await()
+            }
             emit(AgentTurnEvent.Started(request.agentId, requestId, conversationId))
-            if (blockNext) {
-                blockNext = false
-                val signal = CompletableDeferred<Unit>()
-                stopSignal = signal
+            if (signal != null) {
                 signal.await()
                 emit(AgentTurnEvent.Failed(request.agentId, requestId, "turn_interrupted"))
             } else {
-                emit(AgentTurnEvent.Delta(request.agentId, requestId, "fixture response"))
-                emit(AgentTurnEvent.Completed(request.agentId, requestId))
+                when (mode) {
+                    TurnMode.NORMAL -> {
+                        emit(AgentTurnEvent.Delta(request.agentId, requestId, "fixture response"))
+                        emit(AgentTurnEvent.Completed(request.agentId, requestId))
+                    }
+                    TurnMode.FAIL_AFTER_PARTIAL -> {
+                        emit(AgentTurnEvent.Delta(request.agentId, requestId, "partial fixture"))
+                        emit(AgentTurnEvent.Failed(request.agentId, requestId, "grok_retry_after_output"))
+                    }
+                    TurnMode.MISMATCH_REQUEST_ID -> {
+                        emit(AgentTurnEvent.Delta(request.agentId, "$requestId-wrong", "discard"))
+                        emit(AgentTurnEvent.Completed(request.agentId, requestId))
+                    }
+                }
             }
         }
 
@@ -410,6 +535,24 @@ class AgentChatWorkflowInstrumentedTest {
 
         fun blockNextTurn() {
             blockNext = true
+        }
+
+        fun delayAndBlockNextTurn() {
+            startRelease = CompletableDeferred()
+            delayStartNext = true
+            blockNext = true
+        }
+
+        fun releaseDelayedStart() {
+            startRelease.complete(Unit)
+        }
+
+        fun failAfterPartialNextTurn() {
+            nextTurnMode = TurnMode.FAIL_AFTER_PARTIAL
+        }
+
+        fun mismatchNextTurnRequestId() {
+            nextTurnMode = TurnMode.MISMATCH_REQUEST_ID
         }
     }
 
