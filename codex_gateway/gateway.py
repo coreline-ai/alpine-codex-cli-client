@@ -196,6 +196,16 @@ class CodexGatewayService:
                 self._active_login_id = None
         return {"login_id": login_id, "status": "cancelled"}
 
+    def cancel_active_login(self) -> Dict[str, str]:
+        """Cancels a process-recovered pending login without revealing its opaque ID or code."""
+        with self._lock:
+            self._expire_login_locked(time.monotonic())
+            login_id = self._active_login_id
+        if login_id is None:
+            raise GatewayError(409, "no_active_login")
+        self.cancel_login(login_id)
+        return {"status": "cancelled"}
+
     def logout(self) -> Dict[str, str]:
         with self._lock:
             if self._active_turn is not None or self._turn_reservation:
@@ -767,6 +777,9 @@ def make_handler(service: CodexGatewayService):
                 if self.path == "/internal/codex/login/device":
                     self._require_empty_body()
                     self._json(200, service.start_device_login())
+                elif self.path == "/internal/codex/login/active/cancel":
+                    self._require_empty_body()
+                    self._json(200, service.cancel_active_login())
                 elif self.path == "/internal/codex/logout":
                     self._require_empty_body()
                     self._json(200, service.logout())

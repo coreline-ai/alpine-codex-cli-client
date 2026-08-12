@@ -67,6 +67,7 @@ data class CodexChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
     val login: DeviceCodeChallenge? = null,
+    val recoveredPendingLogin: Boolean = false,
     val activeRequestId: String? = null,
     val stopRequested: Boolean = false,
     val stableErrorCode: String? = null,
@@ -146,6 +147,7 @@ class CodexChatViewModel @JvmOverloads constructor(
         if (
             _state.value.connection != CodexConnectionState.LOGIN_REQUIRED ||
             _state.value.login != null ||
+            _state.value.recoveredPendingLogin ||
             loginStartInFlight
         ) return
         loginStartInFlight = true
@@ -161,13 +163,28 @@ class CodexChatViewModel @JvmOverloads constructor(
                         it.copy(
                             connection = CodexConnectionState.LOGIN_PENDING,
                             login = challenge,
+                            recoveredPendingLogin = false,
                             refreshing = false,
                             stableErrorCode = null,
                         )
                     }
                     scheduleLoginPoll(challenge)
                 },
-                onFailure = { setStableError(it) },
+                onFailure = { error ->
+                    if (error.isActiveLoginConflict()) {
+                        _state.update {
+                            it.copy(
+                                connection = CodexConnectionState.LOGIN_REQUIRED,
+                                login = null,
+                                recoveredPendingLogin = true,
+                                refreshing = false,
+                                stableErrorCode = null,
+                            )
+                        }
+                    } else {
+                        setStableError(error)
+                    }
+                },
             )
         }
     }
@@ -190,6 +207,29 @@ class CodexChatViewModel @JvmOverloads constructor(
                         it.copy(
                             connection = CodexConnectionState.LOGIN_REQUIRED,
                             login = null,
+                            recoveredPendingLogin = false,
+                            stableErrorCode = null,
+                        )
+                    }
+                },
+                onFailure = { setStableError(it) },
+            )
+        }
+    }
+
+    /** User action only: clears a pending login that survived app-process recreation. */
+    fun cancelRecoveredDeviceLogin() {
+        if (!_state.value.recoveredPendingLogin || _state.value.refreshing) return
+        _state.update { it.copy(refreshing = true, stableErrorCode = null) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { gatewayClient.cancelActiveDeviceLogin() } }
+            result.fold(
+                onSuccess = {
+                    _state.update {
+                        it.copy(
+                            connection = CodexConnectionState.LOGIN_REQUIRED,
+                            recoveredPendingLogin = false,
+                            refreshing = false,
                             stableErrorCode = null,
                         )
                     }
@@ -338,6 +378,7 @@ class CodexChatViewModel @JvmOverloads constructor(
                         connection = CodexConnectionState.RUNTIME_STOPPED,
                         models = emptyList(),
                         login = null,
+                        recoveredPendingLogin = false,
                         activeRequestId = null,
                         stopRequested = false,
                     )
@@ -410,6 +451,7 @@ class CodexChatViewModel @JvmOverloads constructor(
                             it.copy(
                                 connection = CodexConnectionState.LOGIN_REQUIRED,
                                 login = null,
+                                recoveredPendingLogin = false,
                                 stableErrorCode = if (status.status == "cancelled") null else "login_${status.status}",
                             )
                         }
@@ -477,6 +519,9 @@ class CodexChatViewModel @JvmOverloads constructor(
             )
         }
     }
+
+    private fun Throwable.isActiveLoginConflict(): Boolean =
+        (this as? GatewayClientException)?.gatewayCode == "login_already_active"
 
     private fun restoreState(stored: StoredConversationState?): CodexChatUiState {
         val active = stored?.activeConversationId?.let { activeId ->

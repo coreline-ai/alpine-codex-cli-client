@@ -6,10 +6,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -39,6 +41,7 @@ class CodexChatSurfaceInstrumentedTest {
                     ChatViewport(
                         state = CodexChatUiState(connection = CodexConnectionState.LOGIN_REQUIRED, models = models),
                         onLogin = { loginRequests++ },
+                        onCancelRecoveredLogin = {},
                         onRefresh = {},
                     )
                 } else {
@@ -55,6 +58,31 @@ class CodexChatSurfaceInstrumentedTest {
         compose.runOnUiThread { showModels.value = true }
         compose.onNodeWithText("Other model").performClick()
         assertEquals("model-other", selected)
+    }
+
+    @Test
+    fun recoveredLoginExposesOnlyAnExplicitCancelAction() {
+        var loginRequests = 0
+        var cancelRequests = 0
+        compose.setContent {
+            MaterialTheme {
+                ChatViewport(
+                    state = CodexChatUiState(
+                        connection = CodexConnectionState.LOGIN_REQUIRED,
+                        recoveredPendingLogin = true,
+                    ),
+                    onLogin = { loginRequests++ },
+                    onCancelRecoveredLogin = { cancelRequests++ },
+                    onRefresh = {},
+                )
+            }
+        }
+        compose.onAllNodesWithTag("codex-login-action").assertCountEquals(0)
+        compose.onNodeWithTag("codex-cancel-recovered-login")
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(0, loginRequests)
+        assertEquals(1, cancelRequests)
     }
 
     @Test

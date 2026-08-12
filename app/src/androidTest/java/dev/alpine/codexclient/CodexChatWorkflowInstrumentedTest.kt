@@ -9,6 +9,8 @@ import dev.alpine.codexclient.bridge.CodexRuntimeState
 import dev.alpine.codexclient.bridge.CodexRuntimeStateListener
 import dev.alpine.codexclient.bridge.CodexRuntimeStateSource
 import dev.alpine.codexclient.bridge.GatewayAccount
+import dev.alpine.codexclient.bridge.GatewayClientErrorCode
+import dev.alpine.codexclient.bridge.GatewayClientException
 import dev.alpine.codexclient.bridge.GatewayChatRequest
 import dev.alpine.codexclient.bridge.GatewayHealth
 import dev.alpine.codexclient.bridge.GatewayLoginStart
@@ -149,6 +151,34 @@ class CodexChatWorkflowInstrumentedTest {
         assertTrue(gateway.blockedRequestStopped)
     }
 
+    @Test
+    fun recoveredPendingLoginNeedsExplicitCancelAndNeverAutoRestarts() {
+        val gateway = FakeGatewayClient().apply { rejectNextLoginAsAlreadyActive() }
+        val application = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+        application.deleteFile("codex-chat-state.v1")
+        val viewModel = onMain {
+            CodexChatViewModel(
+                application = application,
+                runtimeStateSource = FakeRuntimeStateSource(),
+                gatewayClient = gateway,
+                chatBackend = CodexGatewayChatBackend(gateway),
+            )
+        }
+
+        awaitState(viewModel) { it.connection == CodexConnectionState.LOGIN_REQUIRED }
+        onMain { viewModel.startDeviceLogin() }
+        awaitState(viewModel) { it.recoveredPendingLogin }
+        assertEquals(1, gateway.loginStartCalls)
+
+        onMain { viewModel.startDeviceLogin() }
+        assertEquals(1, gateway.loginStartCalls)
+
+        onMain { viewModel.cancelRecoveredDeviceLogin() }
+        awaitState(viewModel) { !it.recoveredPendingLogin && !it.refreshing }
+        assertEquals(1, gateway.recoveredLoginCancelCalls)
+        assertEquals(1, gateway.loginStartCalls)
+    }
+
     private fun <T> onMain(block: () -> T): T {
         var value: T? = null
         InstrumentationRegistry.getInstrumentation().runOnMainSync { value = block() }
@@ -185,12 +215,15 @@ class CodexChatWorkflowInstrumentedTest {
             private set
         var logoutCalls = 0
             private set
+        var recoveredLoginCancelCalls = 0
+            private set
         val sentRequests = mutableListOf<GatewayChatRequest>()
         var blockedRequestStopped = false
             private set
 
         @Volatile private var authenticated = false
         @Volatile private var blockNext = false
+        @Volatile private var rejectLoginAsAlreadyActive = false
         @Volatile private var stopSignal: CompletableDeferred<Unit>? = null
 
         fun approveLogin() {
@@ -199,6 +232,10 @@ class CodexChatWorkflowInstrumentedTest {
 
         fun blockNextTurn() {
             blockNext = true
+        }
+
+        fun rejectNextLoginAsAlreadyActive() {
+            rejectLoginAsAlreadyActive = true
         }
 
         override fun health() = GatewayHealth("ready", "ready", "ready")
@@ -210,6 +247,14 @@ class CodexChatWorkflowInstrumentedTest {
 
         override fun startDeviceLogin(): GatewayLoginStart {
             loginStartCalls += 1
+            if (rejectLoginAsAlreadyActive) {
+                rejectLoginAsAlreadyActive = false
+                throw GatewayClientException(
+                    GatewayClientErrorCode.HTTP_ERROR,
+                    statusCode = 409,
+                    gatewayCode = "login_already_active",
+                )
+            }
             return GatewayLoginStart(
                 loginId = "test-login",
                 verificationUrl = "https://auth.openai.com/device",
@@ -225,6 +270,10 @@ class CodexChatWorkflowInstrumentedTest {
         )
 
         override fun cancelLogin(loginId: String) = GatewayLoginStatus(loginId, "cancelled")
+
+        override fun cancelActiveDeviceLogin() {
+            recoveredLoginCancelCalls += 1
+        }
 
         override fun logout() {
             logoutCalls += 1

@@ -147,6 +147,7 @@ private fun AlpineCodexClientApp(
                     ChatViewport(
                         state = chatState,
                         onLogin = chatViewModel::startDeviceLogin,
+                        onCancelRecoveredLogin = chatViewModel::cancelRecoveredDeviceLogin,
                         onRefresh = chatViewModel::refreshConnection,
                         modifier = Modifier.weight(1f),
                     )
@@ -225,6 +226,7 @@ private fun AlpineCodexClientApp(
 fun ChatViewport(
     state: CodexChatUiState,
     onLogin: () -> Unit,
+    onCancelRecoveredLogin: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -257,13 +259,23 @@ fun ChatViewport(
                     Text("Codex gateway 연결을 확인하는 중입니다.")
                 }
                 CodexConnectionState.LOGIN_REQUIRED -> {
-                    Text("공식 Codex Device Code 로그인으로 계정을 연결하세요.")
-                    Spacer(Modifier.size(12.dp))
-                    Button(
-                        modifier = Modifier.testTag("codex-login-action"),
-                        enabled = !state.refreshing,
-                        onClick = onLogin,
-                    ) { Text("Codex 로그인") }
+                    if (state.recoveredPendingLogin) {
+                        Text("이전에 시작한 Device Code 로그인이 아직 활성입니다. 취소한 뒤 새 코드를 시작하세요.")
+                        Spacer(Modifier.size(12.dp))
+                        OutlinedButton(
+                            modifier = Modifier.testTag("codex-cancel-recovered-login"),
+                            enabled = !state.refreshing,
+                            onClick = onCancelRecoveredLogin,
+                        ) { Text("현재 로그인 취소") }
+                    } else {
+                        Text("공식 Codex Device Code 로그인으로 계정을 연결하세요.")
+                        Spacer(Modifier.size(12.dp))
+                        Button(
+                            modifier = Modifier.testTag("codex-login-action"),
+                            enabled = !state.refreshing,
+                            onClick = onLogin,
+                        ) { Text("Codex 로그인") }
+                    }
                 }
                 CodexConnectionState.LOGIN_PENDING -> Text("브라우저에서 승인을 완료한 뒤 상태를 확인합니다.")
                 CodexConnectionState.READY -> Text("모델을 선택하고 첫 메시지를 보내세요.")
@@ -488,25 +500,26 @@ fun DeviceLoginSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Codex Device Code 로그인", style = MaterialTheme.typography.titleLarge)
-            Text("브라우저에서 계정을 로그인·승인한 뒤 이 앱으로 돌아오세요.")
+            Text("1. 아래 Device Code를 복사합니다. 2. 브라우저에서 로그인한 뒤 Device Code 입력란에 붙여넣고 승인합니다.")
             TextButton(
                 modifier = Modifier.testTag("codex-login-cancel"),
                 onClick = onCancel,
             ) { Text("로그인 취소") }
             Text(challenge.userCode, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.testTag("codex-device-code"))
             Text("만료: 약 ${challenge.expiresInSeconds / 60}분 · 상태 확인 간격: ${challenge.pollIntervalSeconds}초")
+            OutlinedButton(
+                modifier = Modifier.testTag("codex-copy-device-code"),
+                onClick = {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Codex Device Code", challenge.userCode))
+                },
+            ) { Text("코드 복사") }
             Button(
                 modifier = Modifier.testTag("codex-open-browser"),
                 onClick = {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(challenge.verificationUrl)))
                 },
             ) { Text("브라우저 열기") }
-            OutlinedButton(
-                onClick = {
-                    val clipboard = context.getSystemService(ClipboardManager::class.java)
-                    clipboard?.setPrimaryClip(ClipData.newPlainText("Codex Device Code", challenge.userCode))
-                },
-            ) { Text("코드 복사") }
             OutlinedButton(onClick = onCheck) { Text("승인 상태 확인") }
             Spacer(Modifier.size(16.dp))
         }

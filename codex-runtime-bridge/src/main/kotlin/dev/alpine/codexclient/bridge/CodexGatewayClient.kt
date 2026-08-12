@@ -131,6 +131,12 @@ open class CodexGatewayClient {
         )
     }
 
+    /** Cancels only a recovered pending login; it never returns its opaque ID or Device Code. */
+    open fun cancelActiveDeviceLogin() {
+        val status = postJson("/internal/codex/login/active/cancel", null).requiredString("status")
+        if (status != "cancelled") throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)
+    }
+
     open fun logout() {
         val status = postJson("/internal/codex/logout", null).requiredString("status")
         if (status != "logged_out") throw GatewayClientException(GatewayClientErrorCode.MALFORMED_RESPONSE)

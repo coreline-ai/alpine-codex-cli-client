@@ -1,6 +1,6 @@
 # Samsung debug E2E evidence (redacted)
 
-Date: 2026-08-11
+Date: 2026-08-12
 
 ## Scope and privacy boundary
 
@@ -20,6 +20,6 @@ Date: 2026-08-11
 | E2E-CLI-01 | Pinned CLI version check returned the closed `CODEX_CLI_READY` state. |
 | app-server smoke | Official CLI `initialize → account/read` returned the closed `APP_SERVER_SMOKE_READY` state. |
 
-## Pending user-authorized actions
+## OAuth progress and pending actions
 
-Device Code challenge creation, browser sign-in/approval, authenticated account check, dynamic model selection, real chat, Stop, force-stop recovery, logout, and Runtime shutdown remain pending. The app is left at the authenticated-action boundary with Runtime/Gateway running and no login challenge started.
+The official Device Code challenge was started once and its browser approval page was opened. The app's code-copy action and a single browser paste/submit attempt were performed without reading, logging, recording, or retaining the code or URL. Android accessibility did not expose the browser's next web input/state, so no account/approval content was collected. Returning to the app confirmed that the challenge remains pending. Browser sign-in/approval, authenticated account check, dynamic model selection, real chat, Stop, force-stop recovery, logout, and Runtime shutdown remain pending.

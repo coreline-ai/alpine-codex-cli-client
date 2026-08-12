@@ -57,6 +57,14 @@ class CodexGatewayClientTest {
     }
 
     @Test
+    fun `cancels a recovered login without exposing its opaque identifier`() = FakeGatewayServer(
+        listOf(Response.json("{\"status\":\"cancelled\",\"login_id\":\"ignored\"}")),
+    ).use { server ->
+        CodexGatewayClient().cancelActiveDeviceLogin()
+        assertEquals(listOf("POST /internal/codex/login/active/cancel"), server.requests)
+    }
+
+    @Test
     fun `rejects HTTP error oversized malformed and invalid utf8 data fail closed`() {
         FakeGatewayServer(listOf(Response.json("{\"error\":{\"code\":\"authentication_required\"}}", status = 401))).use {
             val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient().models() }

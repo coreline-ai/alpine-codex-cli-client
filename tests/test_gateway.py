@@ -155,6 +155,24 @@ class GatewayHttpTest(unittest.TestCase):
         self.assertEqual(502, status)
         self.assertEqual("codex_protocol_invalid", error["error"]["code"])
 
+    def test_recovered_pending_login_requires_explicit_active_cancel(self):
+        harness = self.open("normal")
+        status, started = harness.request("POST", "/internal/codex/login/device")
+        self.assertEqual(200, status)
+        self.assertIn("login_id", started)
+
+        status, cancelled = harness.request("POST", "/internal/codex/login/active/cancel")
+        self.assertEqual(200, status)
+        self.assertEqual({"status": "cancelled"}, cancelled)
+
+        status, missing = harness.request("POST", "/internal/codex/login/active/cancel")
+        self.assertEqual(409, status)
+        self.assertEqual("no_active_login", missing["error"]["code"])
+
+        status, restarted = harness.request("POST", "/internal/codex/login/device")
+        self.assertEqual(200, status)
+        self.assertIn("login_id", restarted)
+
     def test_gateway_owned_binding_survives_restart_and_logout_clears_it(self):
         with tempfile.TemporaryDirectory() as directory:
             store_path = os.path.join(directory, "conversation-bindings.v1.json")
