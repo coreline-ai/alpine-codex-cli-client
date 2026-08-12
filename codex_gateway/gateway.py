@@ -7,7 +7,6 @@ turn.  Codex itself owns authentication material in the guest ``HOME`` directory
 
 from __future__ import annotations
 
-import argparse
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 import json
@@ -915,62 +914,9 @@ class LoopbackGatewayServer(ThreadingHTTPServer):
         super().__init__(address, handler)
 
 
-def serve(
-    codex_path: str,
-    home_directory: str,
-    workspace_directory: str,
-    port: int = DEFAULT_PORT,
-) -> None:
-    if port < 1 or port > 65535:
-        raise ValueError("invalid gateway port")
-    supervisor = AppServerSupervisor(
-        command=[codex_path, "app-server"],
-        working_directory=workspace_directory,
-        environment={"HOME": home_directory},
-    )
-    service: Optional[CodexGatewayService] = None
-    server: Optional[LoopbackGatewayServer] = None
-    try:
-        protocol = CodexAppServerProtocol(supervisor)
-        protocol.initialize("alpine-codex-client", "0.1.0-debug")
-        service = CodexGatewayService(
-            protocol,
-            workspace_directory,
-            conversation_store_path=os.path.join(home_directory, "conversation-bindings.v1.json"),
-        )
-        server = LoopbackGatewayServer((LOOPBACK_HOST, port), make_handler(service))
-        # Consumed in memory by Android's lifecycle controller; it contains no account or chat data.
-        print("CODEX_GATEWAY_READY", flush=True)
-        server.serve_forever(poll_interval=0.25)
-    finally:
-        if server is not None:
-            server.server_close()
-        if service is not None:
-            service.close()
-        supervisor.stop()
-
-
 def _json_depth(value: Any) -> int:
     if isinstance(value, dict):
         return 1 + max((_json_depth(item) for item in value.values()), default=0)
     if isinstance(value, list):
         return 1 + max((_json_depth(item) for item in value), default=0)
     return 0
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--codex", required=True)
-    parser.add_argument("--home", required=True)
-    parser.add_argument("--workdir", required=True)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    args = parser.parse_args()
-    try:
-        serve(args.codex, args.home, args.workdir, args.port)
-    except (GatewayError, ValueError):
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

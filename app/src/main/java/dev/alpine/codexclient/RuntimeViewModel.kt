@@ -37,15 +37,6 @@ data class RuntimeUiState(
     val gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
 )
 
-/** Closed state for the one fixed package bootstrap; guest output is never retained in UI state. */
-enum class GatewayPythonBootstrapOutcome {
-    ALREADY_AVAILABLE,
-    PREFLIGHT_FAILED,
-    INSTALL_FAILED,
-    INSTALLED,
-    VERIFICATION_FAILED,
-}
-
 /** Closed result of staging and fixed-version verification for the official debug CLI. */
 enum class CodexCliBootstrapOutcome {
     READY,
@@ -88,7 +79,9 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
 
     fun install() = runOperation("RUNTIME_INSTALLING") { app.runtimeController.install() }
 
-    fun start() = runOperation("RUNTIME_STARTING") { app.startRuntime() }
+    fun startAlpine() = runOperation("RUNTIME_STARTING") { app.startAlpineRuntime() }
+
+    fun startGateway() = runOperation("GATEWAY_STARTING") { app.startRuntime() }
 
     fun refresh() = runOperation("RUNTIME_HEALTH_CHECKING") { app.runtimeController.refreshHealth() }
 
@@ -199,76 +192,19 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         if (_state.value.busy) return
         _state.update { it.copy(gatewayPythonBootstrap = null) }
         runOperation("RUNTIME_SMOKE_RUNNING") {
-            runBoundedSmoke().thenCompose { pythonAvailable ->
-                if (pythonAvailable) {
-                    setGatewayPythonBootstrap(GatewayPythonBootstrapOutcome.ALREADY_AVAILABLE)
+            app.prepareGatewayPython().thenCompose { outcome ->
+                setGatewayPythonBootstrap(outcome)
+                if (
+                    outcome == GatewayPythonBootstrapOutcome.ALREADY_AVAILABLE ||
+                    outcome == GatewayPythonBootstrapOutcome.INSTALLED
+                ) {
                     CompletableFuture.completedFuture(Unit)
                 } else {
-                    bootstrapGatewayPython()
+                    failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
                 }
             }
         }
     }
-
-    /** Executes fixed argv smoke checks and returns only a closed availability result. */
-    private fun runBoundedSmoke(): CompletionStage<Boolean> =
-        app.runtimeController.execute(
-            RuntimeCommandRequest(
-                executable = "/bin/uname",
-                arguments = listOf("-m"),
-                timeoutMillis = SMOKE_TIMEOUT_MILLIS,
-            ),
-        ).thenCompose { uname ->
-            if (uname.exitCode != 0 || uname.timedOut) {
-                throw RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED)
-            }
-            app.runtimeController.execute(
-                RuntimeCommandRequest(
-                    executable = "/usr/bin/python3",
-                    arguments = listOf("--version"),
-                    timeoutMillis = SMOKE_TIMEOUT_MILLIS,
-                ),
-            )
-        }.thenApply { python ->
-            python.exitCode == 0 && !python.timedOut
-        }
-
-    private fun bootstrapGatewayPython(): CompletionStage<Unit> =
-        app.runtimeController.execute(
-            RuntimeCommandRequest(
-                executable = "/sbin/apk",
-                arguments = listOf("add", "--no-cache", "--simulate", "--no-progress", GATEWAY_PYTHON_PACKAGE),
-                timeoutMillis = PYTHON_BOOTSTRAP_TIMEOUT_MILLIS,
-            ),
-        ).thenCompose { preflight ->
-            if (preflight.exitCode != 0 || preflight.timedOut) {
-                setGatewayPythonBootstrap(GatewayPythonBootstrapOutcome.PREFLIGHT_FAILED)
-                failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
-            } else {
-                app.runtimeController.execute(
-                    RuntimeCommandRequest(
-                        executable = "/sbin/apk",
-                        arguments = listOf("add", "--no-cache", "--no-progress", GATEWAY_PYTHON_PACKAGE),
-                        timeoutMillis = PYTHON_BOOTSTRAP_TIMEOUT_MILLIS,
-                    ),
-                ).thenCompose { install ->
-                    if (install.exitCode != 0 || install.timedOut) {
-                        setGatewayPythonBootstrap(GatewayPythonBootstrapOutcome.INSTALL_FAILED)
-                        failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
-                    } else {
-                        runBoundedSmoke().thenCompose { pythonAvailable ->
-                            if (pythonAvailable) {
-                                setGatewayPythonBootstrap(GatewayPythonBootstrapOutcome.INSTALLED)
-                                CompletableFuture.completedFuture(Unit)
-                            } else {
-                                setGatewayPythonBootstrap(GatewayPythonBootstrapOutcome.VERIFICATION_FAILED)
-                                failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
     private fun setGatewayPythonBootstrap(outcome: GatewayPythonBootstrapOutcome) {
         _state.update { it.copy(gatewayPythonBootstrap = outcome) }
@@ -362,10 +298,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         CompletableFuture<T>().also { it.completeExceptionally(error) }
 
     private companion object {
-        const val SMOKE_TIMEOUT_MILLIS = 15_000L
-        const val PYTHON_BOOTSTRAP_TIMEOUT_MILLIS = 5 * 60_000L
         const val CODEX_CLI_VERSION_TIMEOUT_MILLIS = 30_000L
         const val APP_SERVER_SMOKE_TIMEOUT_MILLIS = 60_000L
-        const val GATEWAY_PYTHON_PACKAGE = "python3"
     }
 }

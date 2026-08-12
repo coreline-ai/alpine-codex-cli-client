@@ -6,7 +6,6 @@ import dev.alpine.runtime.api.AlpineRuntimeManager
 import dev.alpine.runtime.api.RuntimeLifecycleState
 import dev.alpine.runtime.api.RuntimeStartRequest
 import dev.alpine.runtime.api.RuntimeStopReason
-import dev.alpine.runtime.api.RuntimeSubscription
 import dev.alpine.runtime.api.RuntimeTerminalRequest
 import dev.alpine.runtime.api.RuntimeTerminalSession
 import dev.alpine.runtime.host.RuntimeHostController
@@ -20,12 +19,8 @@ internal class AndroidGatewayRuntimeHost(
     private val runtimeManager: AlpineRuntimeManager,
     private val hostController: RuntimeHostController,
 ) : GatewayRuntimeHost {
-    private var externalSessionBinding: RuntimeSubscription? = null
-
     override fun startRuntime(homeDirectory: String): CompletionStage<GatewayRuntimeLease> =
-        runtimeManager.start(RuntimeStartRequest(environment = mapOf("HOME" to homeDirectory))).thenApply { session ->
-            externalSessionBinding?.close()
-            externalSessionBinding = hostController.bindExternalSession(session)
+        hostController.start(RuntimeStartRequest(environment = mapOf("HOME" to homeDirectory))).thenApply { session ->
             object : GatewayRuntimeLease {
                 override fun openGatewayTerminal(request: RuntimeTerminalRequest): CompletionStage<RuntimeTerminalSession> =
                     session.openTerminal(request)
@@ -33,9 +28,7 @@ internal class AndroidGatewayRuntimeHost(
         }
 
     override fun stopRuntime(): CompletionStage<Void> {
-        externalSessionBinding?.close()
-        externalSessionBinding = null
-        return runtimeManager.stop(RuntimeStopReason.USER_REQUEST)
+        return hostController.stop(RuntimeStopReason.USER_REQUEST)
     }
 
     override fun hasActiveRuntime(): Boolean =

@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import dev.alpine.codexclient.bridge.AgentCapabilities
 import dev.alpine.codexclient.bridge.AgentId
@@ -58,7 +60,12 @@ class AgentChatSurfaceInstrumentedTest {
         compose.onAllNodesWithTag("agent-option-grok").assertCountEquals(0)
 
         compose.runOnUiThread { scenario.value = 1 }
-        compose.onNodeWithTag("agent-option-grok").assertIsDisplayed().assertIsEnabled().performClick()
+        val grokOption = compose.onNodeWithTag("agent-option-grok")
+        grokOption.performScrollTo()
+        compose.waitUntil(5_000) { grokOption.isDisplayed() }
+        grokOption.assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
         assertEquals(AgentId.GROK, selected)
 
         selected = null
@@ -105,11 +112,15 @@ class AgentChatSurfaceInstrumentedTest {
 
         compose.runOnUiThread { scenario.value = 2 }
         compose.onNodeWithTag("agent-model-model-2").assertIsEnabled().performClick()
-        compose.onNodeWithTag("agent-model-model-12").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("agent-model-list").performScrollToIndex(13)
+        val lastModel = compose.onNodeWithTag("agent-model-model-12")
+        compose.waitUntil(5_000) { lastModel.isDisplayed() }
+        lastModel.assertIsDisplayed()
         assertEquals("model-2", selected)
 
         selected = null
         compose.runOnUiThread { scenario.value = 3 }
+        compose.onNodeWithTag("agent-model-list").performScrollToIndex(2)
         compose.onNodeWithTag("agent-model-model-2").assertIsNotEnabled()
         assertEquals(null, selected)
     }
@@ -150,8 +161,14 @@ class AgentChatSurfaceInstrumentedTest {
         compose.onNodeWithText("Codex Device 로그인").assertIsDisplayed()
         compose.onAllNodesWithText("SENSITIVE-CODE", substring = true, useUnmergedTree = true)
             .assertCountEquals(0)
-        compose.onNodeWithTag("agent-copy-device-code").assertIsDisplayed()
-        compose.onNodeWithTag("agent-open-browser").performScrollTo().assertIsDisplayed()
+        val copyCode = compose.onNodeWithTag("agent-copy-device-code")
+        copyCode.performScrollTo()
+        compose.waitUntil(5_000) { copyCode.isDisplayed() }
+        copyCode.assertIsDisplayed()
+        val openBrowser = compose.onNodeWithTag("agent-open-browser")
+        openBrowser.performScrollTo()
+        compose.waitUntil(5_000) { openBrowser.isDisplayed() }
+        openBrowser.assertIsDisplayed()
     }
 
     @Test

@@ -17,8 +17,9 @@ Android -> authenticated loopback HTTP/SSE -> Agent Gateway
 ```
 
 The normalized HTTP handler cannot be constructed without an injected request authorizer. Phase 8
-will supply the session-capability/HMAC verifier to this interface; the Phase 5 fake lifecycle uses
-an explicit test authorizer. There is no unsigned default or compatibility bypass.
+connected the production session-capability/HMAC verifier to every Codex and Grok route; the Phase 5
+fake lifecycle retains an explicit test authorizer. There is no unsigned default or compatibility
+bypass.
 
 ## Normalized operations
 

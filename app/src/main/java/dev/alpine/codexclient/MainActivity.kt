@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -52,6 +53,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.alpine.codexclient.bridge.CodexRuntimeLifecycle
 
 class MainActivity : ComponentActivity() {
     private val runtimeViewModel: RuntimeViewModel by viewModels()
@@ -59,6 +61,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setContent { AlpineAgentClientApp(runtimeViewModel, chatViewModel) }
     }
 }
@@ -170,7 +173,8 @@ private fun AlpineCodexClientApp(
             generationActive = chatState.isGenerating,
             onDismiss = { showRuntimeSheet = false },
             onInstall = runtimeViewModel::install,
-            onStart = runtimeViewModel::start,
+            onStartAlpine = runtimeViewModel::startAlpine,
+            onStartGateway = runtimeViewModel::startGateway,
             onStop = runtimeViewModel::stop,
             onRefresh = runtimeViewModel::refresh,
             onPreparePython = runtimeViewModel::runSmoke,
@@ -354,7 +358,8 @@ internal fun RuntimeStatusSheet(
     generationActive: Boolean,
     onDismiss: () -> Unit,
     onInstall: () -> Unit,
-    onStart: () -> Unit,
+    onStartAlpine: () -> Unit,
+    onStartGateway: () -> Unit,
     onStop: () -> Unit,
     onRefresh: () -> Unit,
     onPreparePython: () -> Unit,
@@ -378,9 +383,21 @@ internal fun RuntimeStatusSheet(
                 Button(enabled = !runtimeState.busy && !generationActive, onClick = onInstall) { Text("Runtime 설치") }
             }
             if (runtimeState.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.READY) {
-                Button(enabled = !runtimeState.busy && !generationActive, onClick = onStart) { Text("Runtime 시작") }
+                Button(enabled = !runtimeState.busy && !generationActive, onClick = onStartAlpine) { Text("Alpine 시작") }
             }
             if (runtimeState.sessionActive) {
+                if (
+                    runtimeState.gatewayLifecycle == CodexRuntimeLifecycle.STOPPED ||
+                    runtimeState.gatewayLifecycle == CodexRuntimeLifecycle.FAILED
+                ) {
+                    val pythonReady = runtimeState.gatewayPythonBootstrap == GatewayPythonBootstrapOutcome.ALREADY_AVAILABLE ||
+                        runtimeState.gatewayPythonBootstrap == GatewayPythonBootstrapOutcome.INSTALLED
+                    Button(
+                        enabled = !runtimeState.busy && !generationActive && pythonReady,
+                        onClick = onStartGateway,
+                    ) { Text("Gateway 시작") }
+                    if (!pythonReady) Text("진단에서 Gateway Python 준비를 먼저 실행하세요.")
+                }
                 OutlinedButton(enabled = !runtimeState.busy && !generationActive, onClick = onStop) { Text("Runtime 종료") }
                 Box {
                     OutlinedButton(enabled = !runtimeState.busy && !generationActive, onClick = { showDiagnostics = true }) {

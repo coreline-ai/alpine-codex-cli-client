@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -42,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -231,7 +233,8 @@ internal fun AlpineAgentClientApp(
             generationActive = chatState.isGenerating,
             onDismiss = { showRuntimeSheet = false },
             onInstall = runtimeViewModel::install,
-            onStart = runtimeViewModel::start,
+            onStartAlpine = runtimeViewModel::startAlpine,
+            onStartGateway = runtimeViewModel::startGateway,
             onStop = runtimeViewModel::stop,
             onRefresh = runtimeViewModel::refresh,
             onPreparePython = runtimeViewModel::runSmoke,
@@ -451,16 +454,20 @@ internal fun AgentModelSelectorSheet(
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .heightIn(max = 560.dp)
+                .testTag("agent-model-list")
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text("${agentLabel(state.selectedAgentId)} 모델", style = MaterialTheme.typography.titleLarge)
-            state.models.forEach { model ->
+            item {
+                Text("${agentLabel(state.selectedAgentId)} 모델", style = MaterialTheme.typography.titleLarge)
+            }
+            items(state.models, key = { model -> model.id }) { model ->
                 TextButton(
                     modifier = Modifier.fillMaxWidth().testTag("agent-model-${model.id}"),
                     enabled = model.id != state.selectedModelId && !state.operationLocked,
@@ -472,7 +479,7 @@ internal fun AgentModelSelectorSheet(
                     }
                 }
             }
-            Spacer(Modifier.size(16.dp))
+            item { Spacer(Modifier.size(16.dp)) }
         }
     }
 }

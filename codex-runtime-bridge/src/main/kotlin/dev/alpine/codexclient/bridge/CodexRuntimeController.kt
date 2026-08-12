@@ -23,6 +23,9 @@ enum class CodexRuntimeErrorCode {
     RUNTIME_START_FAILED,
     ARTIFACT_STAGING_FAILED,
     GATEWAY_START_FAILED,
+    GATEWAY_CAPABILITY_FAILED,
+    CODEX_BACKEND_START_FAILED,
+    GATEWAY_BIND_FAILED,
     GATEWAY_READY_TIMEOUT,
     GATEWAY_HEALTH_FAILED,
     RUNTIME_STOP_FAILED,
@@ -54,16 +57,31 @@ data class GatewayLaunchSpec(
     val gatewayRootDirectory: String,
     val homeDirectory: String,
     val workspaceDirectory: String,
+    val grokExecutable: String = "/workspace/.alpine-grok/staging/grok-cli/1.0.0/grok",
+    val grokHomeDirectory: String = "/workspace/.alpine-grok/home",
+    val grokWorkDirectory: String = "/workspace/.alpine-grok/work",
+    val capabilityFile: String = "/workspace/.alpine-codex/security/gateway-capability.v1",
 ) {
     init {
-        listOf(codexExecutable, gatewayRootDirectory, homeDirectory, workspaceDirectory).forEach { value ->
+        listOf(
+            codexExecutable,
+            gatewayRootDirectory,
+            homeDirectory,
+            workspaceDirectory,
+            grokExecutable,
+            grokHomeDirectory,
+            grokWorkDirectory,
+            capabilityFile,
+        ).forEach { value ->
             require(GUEST_PATH.matches(value)) { "gateway launch path is invalid" }
         }
     }
 
     fun command(): String =
-        "exec /usr/bin/python3 -m codex_gateway.gateway --codex $codexExecutable " +
-            "--home $homeDirectory --workdir $workspaceDirectory --port 8787"
+        "exec /usr/bin/python3 -m codex_gateway.agent_gateway --codex $codexExecutable " +
+            "--grok $grokExecutable --codex-home $homeDirectory --grok-home $grokHomeDirectory " +
+            "--grok-work $grokWorkDirectory --workdir $workspaceDirectory " +
+            "--capability-file $capabilityFile"
 
     private companion object {
         val GUEST_PATH = Regex("/[A-Za-z0-9_./+-]+")
@@ -72,6 +90,22 @@ data class GatewayLaunchSpec(
 
 fun interface GatewayArtifactStager {
     fun stage(): GatewayLaunchSpec
+}
+
+interface GatewayRuntimeHealthClient {
+    fun isRuntimeHealthy(): Boolean
+}
+
+interface GatewaySessionLifecycle {
+    fun onGatewayStartFailed()
+    fun onRuntimeStopped()
+
+    companion object {
+        val NO_OP = object : GatewaySessionLifecycle {
+            override fun onGatewayStartFailed() = Unit
+            override fun onRuntimeStopped() = Unit
+        }
+    }
 }
 
 fun interface CodexRuntimeStateListener {
@@ -91,9 +125,10 @@ interface CodexRuntimeStateSource {
 class CodexRuntimeController(
     private val runtimeHost: GatewayRuntimeHost,
     private val stager: GatewayArtifactStager,
-    private val gatewayClient: CodexGatewayClient,
+    private val gatewayClient: GatewayRuntimeHealthClient,
     private val homeDirectory: String,
     private val gatewayReadyTimeoutMillis: Long = 30_000L,
+    private val sessionLifecycle: GatewaySessionLifecycle = GatewaySessionLifecycle.NO_OP,
 ) : AutoCloseable, CodexRuntimeStateSource {
     private val lock = Any()
     private val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -149,9 +184,9 @@ class CodexRuntimeController(
         val future = CompletableFuture<CodexRuntimeState>()
         updateLocked(CodexRuntimeState(CodexRuntimeLifecycle.STARTING, generation))
         executor.execute {
-            val outcome = runCatching { gatewayClient.health() }
+            val outcome = runCatching { gatewayClient.isRuntimeHealthy() }
             synchronized(lock) {
-                if (outcome.isSuccess && isHealthy(outcome.getOrThrow())) {
+                if (outcome.getOrDefault(false)) {
                     updateLocked(CodexRuntimeState(CodexRuntimeLifecycle.RUNNING, generation))
                     future.complete(state)
                 } else {
@@ -227,8 +262,14 @@ class CodexRuntimeController(
             synchronized(ready) {
                 if (!ready.isDone) {
                     val combined = tail + bytes
-                    if (combined.containsBytes(GATEWAY_READY_MARKER)) ready.complete(Unit)
-                    tail = combined.takeLastBytes((GATEWAY_READY_MARKER.size - 1).coerceAtLeast(0))
+                    val failure = GATEWAY_FAILURE_MARKERS.entries.firstOrNull { (marker, _) ->
+                        combined.containsBytes(marker)
+                    }
+                    when {
+                        failure != null -> ready.completeExceptionally(CodexRuntimeException(failure.value))
+                        combined.containsBytes(GATEWAY_READY_MARKER) -> ready.complete(Unit)
+                    }
+                    tail = combined.takeLastBytes((MAX_GATEWAY_MARKER_BYTES - 1).coerceAtLeast(0))
                 }
             }
         }
@@ -251,8 +292,8 @@ class CodexRuntimeController(
                     )
                     return@execute
                 }
-                val health = runCatching { gatewayClient.health() }
-                if (health.isFailure || !isHealthy(health.getOrThrow())) {
+                val healthy = runCatching { gatewayClient.isRuntimeHealthy() }.getOrDefault(false)
+                if (!healthy) {
                     failStart(generation, future, CodexRuntimeErrorCode.GATEWAY_HEALTH_FAILED)
                     return@execute
                 }
@@ -274,6 +315,7 @@ class CodexRuntimeController(
         code: CodexRuntimeErrorCode,
     ) {
         cleanupGatewayTerminal()
+        runCatching { sessionLifecycle.onGatewayStartFailed() }
         runtimeHost.stopRuntime().whenComplete { _, _ ->
             synchronized(lock) {
                 if (state.generation == generation || state.lifecycle == CodexRuntimeLifecycle.STARTING) {
@@ -287,6 +329,7 @@ class CodexRuntimeController(
     private fun stopRuntime(generation: Long, future: CompletableFuture<CodexRuntimeState>) {
         cleanupGatewayTerminal()
         runtimeHost.stopRuntime().whenComplete { _, error ->
+            runCatching { sessionLifecycle.onRuntimeStopped() }
             synchronized(lock) {
                 if (error == null) {
                     updateLocked(CodexRuntimeState(CodexRuntimeLifecycle.STOPPED, generation))
@@ -315,9 +358,6 @@ class CodexRuntimeController(
         state.lifecycle == CodexRuntimeLifecycle.STARTING && state.generation == generation
     }
 
-    private fun isHealthy(health: GatewayHealth): Boolean =
-        health.runtime == "ready" && health.gateway == "ready" && health.codex == "ready"
-
     private fun updateLocked(next: CodexRuntimeState) {
         state = next
         listeners.toList().forEach { listener -> runCatching { listener.onStateChanged(next) } }
@@ -339,6 +379,16 @@ class CodexRuntimeController(
     }
 
     private companion object {
-        val GATEWAY_READY_MARKER = "CODEX_GATEWAY_READY".toByteArray(Charsets.US_ASCII)
+        val GATEWAY_READY_MARKER = "AGENT_GATEWAY_READY".toByteArray(Charsets.US_ASCII)
+        val GATEWAY_FAILURE_MARKERS = linkedMapOf(
+            "AGENT_GATEWAY_FAILED_CAPABILITY".toByteArray(Charsets.US_ASCII) to
+                CodexRuntimeErrorCode.GATEWAY_CAPABILITY_FAILED,
+            "AGENT_GATEWAY_FAILED_CODEX".toByteArray(Charsets.US_ASCII) to
+                CodexRuntimeErrorCode.CODEX_BACKEND_START_FAILED,
+            "AGENT_GATEWAY_FAILED_BIND".toByteArray(Charsets.US_ASCII) to
+                CodexRuntimeErrorCode.GATEWAY_BIND_FAILED,
+        )
+        val MAX_GATEWAY_MARKER_BYTES =
+            (GATEWAY_FAILURE_MARKERS.keys + GATEWAY_READY_MARKER).maxOf(ByteArray::size)
     }
 }

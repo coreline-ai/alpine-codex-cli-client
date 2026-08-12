@@ -18,7 +18,7 @@ class GrokRuntimeSmokeInstrumentedTest {
     fun pinnedGrokInitializesWithoutCredentialAndLeavesNoRuntimeChild() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        assertEquals("dev.alpine.codexclient.debug", context.packageName)
+        assertEquals("dev.alpine.codexclient.labdebug", context.packageName)
         val app = context.applicationContext as AlpineCodexApplication
         assertTrue(
             "Codex gateway must be idle before the Grok-only smoke",

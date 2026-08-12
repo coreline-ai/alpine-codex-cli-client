@@ -9,7 +9,10 @@ object CodexRuntimePaths {
     const val HOME_DIRECTORY = "home"
     const val STAGING_DIRECTORY = "staging"
     const val GATEWAY_DIRECTORY = "gateway"
+    const val SECURITY_DIRECTORY = "security"
     const val GUEST_HOME = "/workspace/.alpine-codex/$HOME_DIRECTORY"
     const val GUEST_STAGING = "/workspace/.alpine-codex/$STAGING_DIRECTORY"
     const val GUEST_GATEWAY = "/workspace/.alpine-codex/$GATEWAY_DIRECTORY"
+    const val GUEST_SECURITY = "/workspace/.alpine-codex/$SECURITY_DIRECTORY"
+    const val GUEST_CAPABILITY_FILE = "$GUEST_SECURITY/gateway-capability.v1"
 }

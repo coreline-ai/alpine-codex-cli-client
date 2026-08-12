@@ -36,26 +36,30 @@ import org.junit.Test
 /** Credential-free selected-Agent workflow. No Runtime process, browser, OAuth, or network starts. */
 class AgentChatWorkflowInstrumentedTest {
     private lateinit var application: Application
-    private lateinit var originalState: File
-    private lateinit var stateBackup: File
+    private lateinit var originalStates: List<File>
+    private lateinit var stateBackups: List<File>
 
     @Before
     fun preserveExistingConversationState() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         application = instrumentation.targetContext.applicationContext as Application
-        originalState = File(application.filesDir, STORE_FILE)
-        stateBackup = File(application.cacheDir, "$STORE_FILE.instrumentation-backup")
-        check(!stateBackup.exists()) { "stale instrumentation state backup" }
-        if (originalState.exists()) {
-            check(originalState.renameTo(stateBackup)) { "failed to preserve existing app state" }
+        originalStates = STORE_FILES.map { File(application.filesDir, it) }
+        stateBackups = STORE_FILES.map { File(application.cacheDir, "$it.instrumentation-backup") }
+        originalStates.zip(stateBackups).forEach { (originalState, stateBackup) ->
+            check(!stateBackup.exists()) { "stale instrumentation state backup" }
+            if (originalState.exists()) {
+                check(originalState.renameTo(stateBackup)) { "failed to preserve existing app state" }
+            }
         }
     }
 
     @After
     fun restoreExistingConversationState() {
-        originalState.delete()
-        if (stateBackup.exists()) {
-            check(stateBackup.renameTo(originalState)) { "failed to restore existing app state" }
+        originalStates.zip(stateBackups).forEach { (originalState, stateBackup) ->
+            originalState.delete()
+            if (stateBackup.exists()) {
+                check(stateBackup.renameTo(originalState)) { "failed to restore existing app state" }
+            }
         }
     }
 
@@ -68,6 +72,7 @@ class AgentChatWorkflowInstrumentedTest {
                 FakeRuntimeStateSource(),
                 gateway,
                 AgentGatewayChatBackend(gateway),
+                true,
             )
         }
 
@@ -174,7 +179,7 @@ class AgentChatWorkflowInstrumentedTest {
         assertEquals(codexConversation, viewModel.state.value.conversationId)
         assertEquals(2, viewModel.state.value.messages.size)
 
-        val storedBytes = File(application.filesDir, STORE_FILE).readBytes().toString(Charsets.UTF_8)
+        val storedBytes = File(application.filesDir, STORE_FILE_V2).readBytes().toString(Charsets.UTF_8)
         assertFalse(storedBytes.contains("CODEX-FIXTURE"))
         assertFalse(storedBytes.contains("auth.x.ai"))
     }
@@ -188,6 +193,7 @@ class AgentChatWorkflowInstrumentedTest {
                 FakeRuntimeStateSource(),
                 gateway,
                 AgentGatewayChatBackend(gateway),
+                true,
             )
         }
 
@@ -202,6 +208,28 @@ class AgentChatWorkflowInstrumentedTest {
             Thread.sleep(25L)
         }
         assertEquals(1, gateway.cancelledLogins[AgentId.CODEX])
+        assertNull(viewModel.state.value.login)
+    }
+
+    @Test
+    fun labBuildBlocksRealOAuthBeforeGatewayDispatch() {
+        val gateway = FakeAgentGatewayClient()
+        val viewModel = onMain {
+            AgentChatViewModel(
+                application,
+                FakeRuntimeStateSource(),
+                gateway,
+                AgentGatewayChatBackend(gateway),
+                false,
+            )
+        }
+        awaitState(viewModel) { it.connection == AgentConnectionState.LOGIN_REQUIRED }
+        onMain { viewModel.startDeviceLogin() }
+        awaitState(viewModel) {
+            it.connection == AgentConnectionState.STABLE_ERROR &&
+                it.stableErrorCode == "oauth_disabled_in_lab_build"
+        }
+        assertEquals(null, gateway.loginStarts[AgentId.CODEX])
         assertNull(viewModel.state.value.login)
     }
 
@@ -250,6 +278,7 @@ class AgentChatWorkflowInstrumentedTest {
                 FakeRuntimeStateSource(),
                 gateway,
                 AgentGatewayChatBackend(gateway),
+                true,
             )
         }
         awaitState(viewModel) { it.connection == AgentConnectionState.LOGIN_REQUIRED }
@@ -557,6 +586,8 @@ class AgentChatWorkflowInstrumentedTest {
     }
 
     private companion object {
-        const val STORE_FILE = "codex-chat-state.v1"
+        const val STORE_FILE_V1 = "codex-chat-state.v1"
+        const val STORE_FILE_V2 = "codex-chat-state.v2"
+        val STORE_FILES = listOf(STORE_FILE_V1, STORE_FILE_V2)
     }
 }

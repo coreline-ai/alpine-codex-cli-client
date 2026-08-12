@@ -12,8 +12,8 @@ android {
         applicationId = "dev.alpine.codexclient"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appLabel"] = "Alpine Agent Client"
         ndk { abiFilters += "arm64-v8a" }
@@ -21,14 +21,25 @@ android {
 
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = ".labdebug"
+            versionNameSuffix = "-labdebug"
+            manifestPlaceholders["appLabel"] = "Alpine Agent Client (Lab)"
+            buildConfigField("boolean", "ALLOW_REAL_OAUTH", "false")
+        }
+        create("secureDebug") {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
-            manifestPlaceholders["appLabel"] = "Alpine Agent Client (Debug)"
+            versionNameSuffix = "-secure-debug"
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
+            manifestPlaceholders["appLabel"] = "Alpine Agent Client"
+            buildConfigField("boolean", "ALLOW_REAL_OAUTH", "true")
         }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // The installer copies the bundled rootfs as an asset and executes PRoot
@@ -39,6 +50,7 @@ android {
 
     sourceSets {
         getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets/audit"))
+        getByName("secureDebug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets/audit"))
     }
 
     packaging {
@@ -83,7 +95,10 @@ val generateDebugComponentInventory by tasks.registering(Exec::class) {
 }
 
 tasks.configureEach {
-    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
+    if (
+        name == "mergeDebugAssets" || name == "mergeSecureDebugAssets" ||
+        (name.contains("Debug") && name.lowercase().contains("lint"))
+    ) {
         dependsOn(generateDebugComponentInventory)
     }
 }
@@ -112,15 +127,16 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
-    debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
-
     testImplementation("junit:junit:4.13.2")
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+
+    // Compose instrumentation needs its target-process idling/semantics bridge in the
+    // lab APK. The secureDebug configurations below explicitly exclude this artifact.
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 kotlin {
@@ -128,4 +144,9 @@ kotlin {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         jvmDefault.set(org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode.DISABLE)
     }
+}
+
+configurations.matching { it.name.startsWith("secureDebug", ignoreCase = true) }.configureEach {
+    exclude(group = "androidx.compose.ui", module = "ui-test-manifest")
+    exclude(group = "androidx.compose.ui", module = "ui-tooling")
 }

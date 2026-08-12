@@ -5,7 +5,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler
 import json
 from typing import Any, Callable, Dict, Mapping, Tuple
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 from codex_gateway.agents.service import AgentGatewayService, AgentServiceError
 from codex_gateway.gateway import LOOPBACK_HOST, MAX_REQUEST_BYTES, MAX_SSE_EVENT_BYTES, _json_depth
@@ -39,26 +39,26 @@ def make_agent_handler(
                 return
             try:
                 parsed = self._target()
-                self._authorize("GET", self.path, b"")
-                if parsed.path == "/healthz" and not parsed.query:
+                self._validate_request_shape("GET", parsed.path)
+                self._authorize("GET", parsed.path, b"")
+                if parsed.path == "/healthz":
                     self._json(200, service.health())
-                elif parsed.path == "/v1/agents" and not parsed.query:
+                elif parsed.path == "/v1/agents":
                     self._json(200, service.agents())
                 elif parsed.path == "/v1/models":
-                    agent_id = self._single_agent_query(parsed.query)
-                    self._json(200, service.models(agent_id))
+                    self._json(200, service.models())
                 else:
                     parts = parsed.path.strip("/").split("/")
-                    if not parsed.query and len(parts) == 4 and parts[:2] == ["internal", "agents"] and parts[3] == "account":
+                    if len(parts) == 4 and parts[:2] == ["internal", "agents"] and parts[3] == "account":
                         self._json(200, service.account(parts[2]))
-                    elif not parsed.query and len(parts) == 5 and parts[:2] == ["internal", "agents"] and parts[3] == "login":
+                    elif len(parts) == 5 and parts[:2] == ["internal", "agents"] and parts[3] == "login":
                         self._json(200, service.login_status(parts[2], parts[4]))
                     else:
                         self._error(404, "not_found")
             except AgentServiceError as error:
                 self._error(error.status, error.code)
             except PermissionError:
-                self._error(401, "gateway_unauthorized")
+                self._error(401, "gateway_auth_failed")
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._is_loopback_client():
@@ -66,10 +66,9 @@ def make_agent_handler(
                 return
             try:
                 parsed = self._target()
+                self._validate_request_shape("POST", parsed.path)
                 body = self._read_body()
-                self._authorize("POST", self.path, body)
-                if parsed.query:
-                    raise AgentServiceError(404, "not_found")
+                self._authorize("POST", parsed.path, body)
                 if parsed.path == "/internal/agents/select":
                     self._json(200, service.select(self._request_object(body)))
                     return
@@ -98,15 +97,48 @@ def make_agent_handler(
             except AgentServiceError as error:
                 self._error(error.status, error.code)
             except PermissionError:
-                self._error(401, "gateway_unauthorized")
+                self._error(401, "gateway_auth_failed")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self._error(405, "method_not_allowed")
+
+        def do_PUT(self) -> None:  # noqa: N802
+            self._error(405, "method_not_allowed")
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            self._error(405, "method_not_allowed")
 
         def _target(self):
             if not isinstance(self.path, str) or len(self.path) > 2048 or not self.path.startswith("/"):
                 raise AgentServiceError(400, "invalid_request")
             parsed = urlsplit(self.path)
-            if parsed.scheme or parsed.netloc or parsed.fragment:
+            if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
                 raise AgentServiceError(400, "invalid_request")
             return parsed
+
+        def _validate_request_shape(self, method: str, path: str) -> None:
+            host_values = self.headers.get_all("Host") or []
+            expected_host = f"{LOOPBACK_HOST}:{self.server.server_address[1]}"
+            if len(host_values) != 1 or host_values[0] != expected_host:
+                raise AgentServiceError(400, "invalid_request")
+            if self.headers.get_all("Origin") or self.headers.get_all("Transfer-Encoding"):
+                raise AgentServiceError(400, "invalid_request")
+            lengths = self.headers.get_all("Content-Length") or []
+            if len(lengths) > 1:
+                raise AgentServiceError(400, "invalid_request")
+            content_type = self.headers.get_all("Content-Type") or []
+            if len(content_type) > 1:
+                raise AgentServiceError(400, "invalid_request")
+            if method == "GET":
+                if lengths not in ([], ["0"]) or content_type:
+                    raise AgentServiceError(400, "invalid_request")
+                return
+            json_path = path in {"/internal/agents/select", "/v1/chat/completions"}
+            if json_path:
+                if content_type != ["application/json"]:
+                    raise AgentServiceError(400, "invalid_request")
+            elif content_type not in ([], ["application/json"]):
+                raise AgentServiceError(400, "invalid_request")
 
         def _read_body(self) -> bytes:
             raw = self.headers.get("Content-Length")
@@ -118,7 +150,10 @@ def make_agent_handler(
                 raise AgentServiceError(400, "invalid_request") from error
             if length < 0 or length > MAX_REQUEST_BYTES:
                 raise AgentServiceError(413, "request_too_large")
-            return self.rfile.read(length)
+            body = self.rfile.read(length)
+            if len(body) != length:
+                raise AgentServiceError(400, "invalid_request")
+            return body
 
         def _authorize(self, method: str, target: str, body: bytes) -> None:
             # Header values are copied only for immediate verification; neither this handler nor
@@ -145,18 +180,6 @@ def make_agent_handler(
         def _require_empty(body: bytes) -> None:
             if body:
                 raise AgentServiceError(400, "invalid_request")
-
-        @staticmethod
-        def _single_agent_query(query: str):
-            if not query:
-                return None
-            try:
-                values = parse_qs(query, keep_blank_values=True, strict_parsing=True)
-            except ValueError as error:
-                raise AgentServiceError(400, "invalid_request") from error
-            if set(values) != {"agent_id"} or len(values["agent_id"]) != 1:
-                raise AgentServiceError(400, "invalid_request")
-            return values["agent_id"][0]
 
         def _stream(self, gateway: AgentGatewayService, handle) -> None:
             self.send_response(200)

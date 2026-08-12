@@ -82,6 +82,7 @@ Allowed environment names are limited to `HOME`, `GROK_HOME`, `GROK_LOGIN_DEVICE
   authenticated real-session no-tool assertion remains gated on secure OAuth in Phase 9 because the
   official CLI rejects credential-free `session/new`.
 - Actual Device OAuth, dynamic account model listing, one real stream turn, Stop, force-stop recovery, and logout remain Phase 9 work.
-- Actual Grok OAuth is blocked until the secure/non-debuggable app, authenticated Gateway, and sensitive OAuth UI gates pass.
+- The secure/non-debuggable app, authenticated Gateway, and sensitive OAuth UI gates passed in
+  Phase 8. Actual Grok OAuth remains blocked only on the explicit Phase 9 user approval.
 
 All temporary device and host preflight binaries, homes, and APK copies created for read-only checks were removed after verification. Existing app data, Codex credential, reference app, and reference repository were not modified.

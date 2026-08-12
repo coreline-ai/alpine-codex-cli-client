@@ -89,6 +89,7 @@ class AgentChatViewModel @JvmOverloads constructor(
         (application as AlpineCodexApplication).agentGatewayClient,
     private val chatBackend: AgentGatewayChatBackend =
         (application as AlpineCodexApplication).agentChatBackend,
+    private val allowDeviceOAuth: Boolean = BuildConfig.ALLOW_REAL_OAUTH,
 ) : AndroidViewModel(application) {
     private val conversationStore = EncryptedConversationStore(application)
     private val restored = conversationStore.load()
@@ -209,6 +210,16 @@ class AgentChatViewModel @JvmOverloads constructor(
             before.connection != AgentConnectionState.LOGIN_REQUIRED || before.login != null ||
             before.recoveredPendingLogin || loginStartInFlight
         ) return
+        if (!allowDeviceOAuth) {
+            _state.update {
+                it.copy(
+                    connection = AgentConnectionState.STABLE_ERROR,
+                    refreshing = false,
+                    stableErrorCode = "oauth_disabled_in_lab_build",
+                )
+            }
+            return
+        }
         loginStartInFlight = true
         _state.update { it.copy(refreshing = true, stableErrorCode = null) }
         viewModelScope.launch {

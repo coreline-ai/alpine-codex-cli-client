@@ -41,3 +41,25 @@ class Phase7VerifierTest(unittest.TestCase):
     def test_clean_room_source_and_git_scan_passes_without_an_apk(self) -> None:
         result = self.run_script("scripts/verify-debug-clean-room.py")
         self.assertIn("PASS", result.stdout)
+
+    def test_sensitive_evidence_scanner_accepts_counts_and_rejects_grok_material(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "evidence.txt"
+            evidence.write_text(
+                "agent=grok authenticated=true user_nodes=1 assistant_nodes=1 terminal_events=1\n",
+                encoding="utf-8",
+            )
+            result = self.run_script("scripts/verify-sensitive-evidence.py", str(evidence))
+            self.assertIn("PASS", result.stdout)
+
+            violations = (
+                "https://auth.x.ai/device?challenge=synthetic",
+                "user_code=SYNTHETIC",
+                "person@example.test",
+                "'prompt': 'synthetic'",
+            )
+            for violation in violations:
+                with self.subTest(violation=violation):
+                    evidence.write_text(violation, encoding="utf-8")
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        self.run_script("scripts/verify-sensitive-evidence.py", str(evidence))

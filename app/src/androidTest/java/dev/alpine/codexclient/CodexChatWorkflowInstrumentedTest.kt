@@ -36,6 +36,7 @@ class CodexChatWorkflowInstrumentedTest {
     fun encryptedConversationStoreWritesAndReloadsLocalSyntheticState() {
         val application = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
         application.deleteFile("codex-chat-state.v1")
+        application.deleteFile("codex-chat-state.v2")
         val store = EncryptedConversationStore(application)
         val state = StoredConversationState(
             activeConversationId = "conversation-store-test",
@@ -59,6 +60,7 @@ class CodexChatWorkflowInstrumentedTest {
         val runtime = FakeRuntimeStateSource()
         val application = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
         application.deleteFile("codex-chat-state.v1")
+        application.deleteFile("codex-chat-state.v2")
         val viewModel = onMain {
             CodexChatViewModel(
                 application = application,
@@ -133,6 +135,7 @@ class CodexChatWorkflowInstrumentedTest {
             it.connection == CodexConnectionState.GENERATING && it.activeRequestId != null
         }
         onMain { viewModel.stopGeneration() }
+        awaitCondition("fake interrupt dispatch") { gateway.interruptCalls == 1 }
         awaitState(viewModel) { it.connection == CodexConnectionState.STABLE_ERROR }
         assertEquals(1, gateway.interruptCalls)
 
@@ -156,6 +159,7 @@ class CodexChatWorkflowInstrumentedTest {
         val gateway = FakeGatewayClient().apply { rejectNextLoginAsAlreadyActive() }
         val application = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
         application.deleteFile("codex-chat-state.v1")
+        application.deleteFile("codex-chat-state.v2")
         val viewModel = onMain {
             CodexChatViewModel(
                 application = application,
@@ -187,12 +191,16 @@ class CodexChatWorkflowInstrumentedTest {
     }
 
     private fun awaitState(viewModel: CodexChatViewModel, predicate: (CodexChatUiState) -> Boolean) {
+        awaitCondition("fake chat state") { predicate(viewModel.state.value) }
+    }
+
+    private fun awaitCondition(label: String, predicate: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 5_000L
         while (System.currentTimeMillis() < deadline) {
-            if (predicate(viewModel.state.value)) return
+            if (predicate()) return
             Thread.sleep(25L)
         }
-        throw AssertionError("timed out waiting for fake chat state")
+        throw AssertionError("timed out waiting for $label")
     }
 
     private class FakeRuntimeStateSource : CodexRuntimeStateSource {
@@ -294,10 +302,13 @@ class CodexChatWorkflowInstrumentedTest {
         override fun stream(request: GatewayChatRequest, control: GatewayStreamControl): Flow<GatewayStreamEvent> = flow {
             sentRequests += request
             val requestId = "test-turn-${sentRequests.size}"
+            val signal = if (blockNext) {
+                CompletableDeferred<Unit>().also { stopSignal = it }
+            } else {
+                null
+            }
             emit(GatewayStreamEvent(requestId, "start", conversationId = "conversation-test"))
-            if (blockNext) {
-                val signal = CompletableDeferred<Unit>()
-                stopSignal = signal
+            if (signal != null) {
                 signal.await()
                 emit(GatewayStreamEvent(requestId, "error", code = "turn_interrupted"))
             } else {

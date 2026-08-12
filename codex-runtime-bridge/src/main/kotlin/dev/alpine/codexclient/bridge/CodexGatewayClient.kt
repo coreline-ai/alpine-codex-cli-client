@@ -85,7 +85,13 @@ class GatewayStreamControl internal constructor() {
  * Bounded client for the one gateway address owned by this app. It has no configuration surface
  * for remote endpoints, headers, credentials, alternate transports, retries, or fallbacks.
  */
-open class CodexGatewayClient {
+open class CodexGatewayClient(
+    private val requestSigner: GatewayRequestSigner = GatewayRequestSigner.ephemeral(),
+) : GatewayRuntimeHealthClient {
+
+    override fun isRuntimeHealthy(): Boolean = health().let {
+        it.runtime == "ready" && it.gateway == "ready" && it.codex == "ready"
+    }
 
     open fun health(): GatewayHealth {
         val objectValue = getJson("/healthz")
@@ -195,8 +201,10 @@ open class CodexGatewayClient {
             activeConnection.set(connection)
             connection.requestMethod = "POST"
             connection.doOutput = true
+            connection.setFixedLengthStreamingMode(body.size)
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Accept", "text/event-stream")
+            requestSigner.authorize(connection, "POST", "/v1/chat/completions", body)
             connection.outputStream.use { it.write(body) }
             val status = connection.responseCode
             if (status !in 200..299) throw httpFailure(connection, status)
@@ -265,6 +273,7 @@ open class CodexGatewayClient {
         val connection = open(path)
         return try {
             connection.requestMethod = "GET"
+            requestSigner.authorize(connection, "GET", path, EMPTY_BODY)
             readJson(connection)
         } finally {
             connection.disconnect()
@@ -278,11 +287,15 @@ open class CodexGatewayClient {
             if (body != null) {
                 if (body.size > MAX_REQUEST_BYTES) throw GatewayClientException(GatewayClientErrorCode.REQUEST_TOO_LARGE)
                 connection.doOutput = true
+                connection.setFixedLengthStreamingMode(body.size)
                 connection.setRequestProperty("Content-Type", "application/json")
+                requestSigner.authorize(connection, "POST", path, body)
                 connection.outputStream.use { it.write(body) }
             } else {
                 connection.doOutput = true
                 connection.setFixedLengthStreamingMode(0)
+                connection.setRequestProperty("Content-Type", "application/json")
+                requestSigner.authorize(connection, "POST", path, EMPTY_BODY)
                 connection.outputStream.close()
             }
             readJson(connection)
@@ -421,6 +434,7 @@ open class CodexGatewayClient {
         val DATA_PREFIX = "data:".toByteArray(Charsets.US_ASCII)
         val COLON_PREFIX = ":".toByteArray(Charsets.US_ASCII)
         val DONE_MARKER = "[DONE]".toByteArray(Charsets.US_ASCII)
+        val EMPTY_BODY = byteArrayOf()
         val OPAQUE_PATH = Regex("[A-Za-z0-9_-]+")
         val ALLOWED_PATHS = setOf(
             "/healthz",

@@ -75,7 +75,12 @@ class AgentGatewayStreamControl internal constructor(private val agentId: AgentI
  * Typed client for the normalized selected-Agent Gateway. Endpoint and Agent values are closed;
  * callers cannot supply a host, arbitrary path, header, credential, retry, or fallback.
  */
-open class AgentGatewayClient {
+open class AgentGatewayClient(
+    private val requestSigner: GatewayRequestSigner = GatewayRequestSigner.ephemeral(),
+) : GatewayRuntimeHealthClient {
+    override fun isRuntimeHealthy(): Boolean = health().let {
+        it.runtime == "ready" && it.gateway == "ready" && it.backendReady
+    }
     open fun health(): AgentGatewayHealth {
         val value = getJson("/healthz")
         return AgentGatewayHealth(
@@ -219,8 +224,10 @@ open class AgentGatewayClient {
             activeConnection.set(connection)
             connection.requestMethod = "POST"
             connection.doOutput = true
+            connection.setFixedLengthStreamingMode(body.size)
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Accept", "text/event-stream")
+            requestSigner.authorize(connection, "POST", "/v1/chat/completions", body)
             connection.outputStream.use { it.write(body) }
             val status = connection.responseCode
             if (status !in 200..299) throw httpFailure(connection, status)
@@ -324,6 +331,7 @@ open class AgentGatewayClient {
         val connection = open(path)
         return try {
             connection.requestMethod = "GET"
+            requestSigner.authorize(connection, "GET", path, EMPTY_BODY)
             readJson(connection)
         } finally {
             connection.disconnect()
@@ -334,13 +342,18 @@ open class AgentGatewayClient {
         val connection = open(path)
         return try {
             connection.requestMethod = "POST"
-            connection.doOutput = true
             if (body == null) {
+                connection.doOutput = true
                 connection.setFixedLengthStreamingMode(0)
+                connection.setRequestProperty("Content-Type", "application/json")
+                requestSigner.authorize(connection, "POST", path, EMPTY_BODY)
                 connection.outputStream.close()
             } else {
                 if (body.size > MAX_REQUEST_BYTES) failure(GatewayClientErrorCode.REQUEST_TOO_LARGE)
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(body.size)
                 connection.setRequestProperty("Content-Type", "application/json")
+                requestSigner.authorize(connection, "POST", path, body)
                 connection.outputStream.use { it.write(body) }
             }
             readJson(connection)
@@ -488,6 +501,7 @@ open class AgentGatewayClient {
         val DATA_PREFIX = "data:".toByteArray(Charsets.US_ASCII)
         val COLON_PREFIX = ":".toByteArray(Charsets.US_ASCII)
         val DONE_MARKER = "[DONE]".toByteArray(Charsets.US_ASCII)
+        val EMPTY_BODY = byteArrayOf()
         val OPAQUE_PATH = Regex("[A-Za-z0-9_-]+")
         val EXACT_PATHS = setOf("/healthz", "/v1/agents", "/internal/agents/select", "/v1/models", "/v1/chat/completions")
         val AGENT_MANAGEMENT_PATH = Regex("/internal/agents/(codex|grok)/(account|logout|login/device)")

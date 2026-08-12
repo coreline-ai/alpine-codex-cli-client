@@ -29,6 +29,8 @@ import dev.alpine.codexclient.bridge.AgentGatewayChatBackend
 import dev.alpine.codexclient.bridge.CodexRuntimeController
 import dev.alpine.codexclient.bridge.GatewayArtifactStager
 import dev.alpine.codexclient.bridge.GatewayLaunchSpec
+import dev.alpine.codexclient.bridge.GatewayRequestSigner
+import dev.alpine.codexclient.bridge.GatewaySessionLifecycle
 import java.io.File
 
 class AlpineCodexApplication : Application() {
@@ -45,6 +47,8 @@ class AlpineCodexApplication : Application() {
     lateinit var codexStagingDirectory: File
         private set
     lateinit var codexGatewayDirectory: File
+        private set
+    lateinit var gatewaySecurityDirectory: File
         private set
     lateinit var grokWorkspaceDirectory: File
         private set
@@ -74,6 +78,8 @@ class AlpineCodexApplication : Application() {
         private set
     lateinit var agentChatBackend: AgentGatewayChatBackend
         private set
+    private lateinit var gatewayCapabilityManager: GatewayCapabilityManager
+    private lateinit var gatewayPythonBootstrapper: GatewayPythonBootstrapper
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
     private var backgroundBinding: RuntimeSubscription? = null
@@ -123,6 +129,10 @@ class AlpineCodexApplication : Application() {
             workspaceDirectory,
             File(codexWorkspaceDirectory, CodexRuntimePaths.GATEWAY_DIRECTORY),
         )
+        gatewaySecurityDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(codexWorkspaceDirectory, CodexRuntimePaths.SECURITY_DIRECTORY),
+        )
         grokWorkspaceDirectory = AppPrivatePathPolicy.ensureDirectory(
             workspaceDirectory,
             File(workspaceDirectory, GrokRuntimePaths.PRIVATE_WORKSPACE_DIRECTORY),
@@ -150,15 +160,21 @@ class AlpineCodexApplication : Application() {
         codexCliArtifactProvider = CodexCliArtifactProvider(this)
         grokCliArtifactProvider = GrokCliArtifactProvider(this)
         codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
-        codexGatewayClient = CodexGatewayClient()
+        gatewayCapabilityManager = GatewayCapabilityManager(this, gatewaySecurityDirectory)
+        gatewayPythonBootstrapper = GatewayPythonBootstrapper(runtimeController)
+        codexGatewayClient = CodexGatewayClient(GatewayRequestSigner(gatewayCapabilityManager))
         codexChatBackend = CodexGatewayChatBackend(codexGatewayClient)
-        agentGatewayClient = AgentGatewayClient()
+        agentGatewayClient = AgentGatewayClient(GatewayRequestSigner(gatewayCapabilityManager))
         agentChatBackend = AgentGatewayChatBackend(agentGatewayClient)
         codexRuntimeController = CodexRuntimeController(
             runtimeHost = AndroidGatewayRuntimeHost(runtimeManager, runtimeController),
             stager = GatewayArtifactStager(::stageGatewayLaunch),
-            gatewayClient = codexGatewayClient,
+            gatewayClient = agentGatewayClient,
             homeDirectory = CodexRuntimePaths.GUEST_HOME,
+            sessionLifecycle = object : GatewaySessionLifecycle {
+                override fun onGatewayStartFailed() = gatewayCapabilityManager.cleanupTransientStart()
+                override fun onRuntimeStopped() = gatewayCapabilityManager.clearAfterRuntimeStop()
+            },
         )
         // This only probes an already-running app-private loopback gateway after process recovery.
         codexRuntimeController.reconnectIfRuntimeActive()
@@ -167,11 +183,25 @@ class AlpineCodexApplication : Application() {
         }
     }
 
-    /** Starts Runtime, stages verified assets, and launches the fixed loopback gateway in order. */
+    /** Starts only Alpine so the user can explicitly prepare the one allowlisted Python package. */
+    fun startAlpineRuntime() = runtimeController.start(
+        RuntimeStartRequest(environment = mapOf("HOME" to CodexRuntimePaths.GUEST_HOME)),
+    )
+
+    /** Runs only the fixed python3 availability/simulate/install/verify sequence. */
+    fun prepareGatewayPython() = gatewayPythonBootstrapper.prepare()
+
+    /** Stages verified assets and launches the fixed loopback gateway in the active Runtime. */
     fun startRuntime() = codexRuntimeController.start()
 
-    /** Stops the gateway terminal before releasing the app-private Runtime session. */
-    fun stopRuntime() = codexRuntimeController.stop()
+    /** Stops the gateway first, or the raw Alpine preflight session when no gateway was started. */
+    fun stopRuntime() = if (
+        codexRuntimeController.currentState().lifecycle == dev.alpine.codexclient.bridge.CodexRuntimeLifecycle.STOPPED
+    ) {
+        runtimeController.stop(RuntimeStopReason.USER_REQUEST)
+    } else {
+        codexRuntimeController.stop()
+    }
 
     /** Stages the debug-only official CLI before any app-server process can start. */
     fun stageCodexCli(): StagedCodexCli = codexCliArtifactProvider.stage(
@@ -205,20 +235,28 @@ class AlpineCodexApplication : Application() {
 
     private fun stageGatewayLaunch(): GatewayLaunchSpec {
         val cli = stageCodexCli()
-        stageGrokCli()
+        val grok = stageGrokCli()
         stageGrokProfile()
         stageCodexGateway()
+        OfficialCliHomeProvisioner.provisionCodex(codexHomeDirectory)
+        OfficialCliHomeProvisioner.validateGrok(grokHomeDirectory)
+        val capabilityFile = gatewayCapabilityManager.rotateAndStage()
         return GatewayLaunchSpec(
             codexExecutable = cli.guestExecutablePath,
+            grokExecutable = grok.guestExecutablePath,
             gatewayRootDirectory = CodexRuntimePaths.GUEST_GATEWAY,
             homeDirectory = CodexRuntimePaths.GUEST_HOME,
             workspaceDirectory = "/workspace",
+            grokHomeDirectory = GrokRuntimePaths.GUEST_HOME,
+            grokWorkDirectory = GrokRuntimePaths.GUEST_WORK,
+            capabilityFile = capabilityFile,
         )
     }
 
     override fun onTerminate() {
         backgroundBinding?.close()
         backgroundController.stop()
+        gatewayCapabilityManager.close()
         codexRuntimeController.close()
         runtimeController.close()
         runtimeManager.close()

@@ -227,6 +227,30 @@ class CodexGatewayClientTest {
     }
 
     @Test
+    fun `closed startup failure marker fails fast without terminal output detail`() {
+        val terminal = FakeTerminal(
+            emitReadyOnWrite = false,
+            markerOnWrite = "AGENT_GATEWAY_FAILED_CODEX\n",
+        )
+        val host = FakeRuntimeHost(terminal)
+        CodexRuntimeController(
+            runtimeHost = host,
+            stager = GatewayArtifactStager { launchSpec() },
+            gatewayClient = CodexGatewayClient(),
+            homeDirectory = "/workspace/.alpine-codex/home",
+        ).use { controller ->
+            val error = assertThrows(ExecutionException::class.java) {
+                controller.start().toCompletableFuture().get(2, TimeUnit.SECONDS)
+            }
+            assertEquals(
+                CodexRuntimeErrorCode.CODEX_BACKEND_START_FAILED,
+                (error.cause as CodexRuntimeException).errorCode,
+            )
+            assertEquals(1, host.stopCalls)
+        }
+    }
+
+    @Test
     fun `process recreation only reconnects to an already active healthy loopback gateway`() = FakeGatewayServer(
         listOf(Response.json("{\"runtime\":\"ready\",\"gateway\":\"ready\",\"codex\":\"ready\"}")),
     ).use { server ->
@@ -342,7 +366,10 @@ class CodexGatewayClientTest {
         override fun hasActiveRuntime(): Boolean = runtimeAlreadyActive
     }
 
-    private class FakeTerminal(private val emitReadyOnWrite: Boolean) : RuntimeTerminalSession {
+    private class FakeTerminal(
+        private val emitReadyOnWrite: Boolean,
+        private val markerOnWrite: String? = null,
+    ) : RuntimeTerminalSession {
         override val id: String = "gateway-terminal"
         override val isOpen: Boolean = true
         override val resizeSupport: RuntimeTerminalResizeSupport = RuntimeTerminalResizeSupport.INITIAL_SIZE_ONLY
@@ -356,7 +383,8 @@ class CodexGatewayClientTest {
         }
 
         override fun write(bytes: ByteArray): CompletionStage<Void> {
-            if (emitReadyOnWrite) listeners.forEach { it("CODEX_GATEWAY_READY\n".toByteArray()) }
+            val marker = markerOnWrite ?: "AGENT_GATEWAY_READY\n".takeIf { emitReadyOnWrite }
+            if (marker != null) listeners.forEach { it(marker.toByteArray()) }
             return CompletableFuture.completedFuture(null)
         }
 
