@@ -1,0 +1,291 @@
+"""Generation-scoped, bounded JSON-RPC multiplexing for Grok ACP."""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass, field
+import json
+import threading
+from typing import Any, Callable, Deque, Dict, Optional, Set
+
+from .contract import NOTIFICATION_METHODS, TERMINAL_NOTIFICATION_METHOD, _RequestMethod
+
+
+class AcpError(RuntimeError):
+    code = "grok_acp_error"
+
+    def __init__(self, code: Optional[str] = None) -> None:
+        self.code = code or self.code
+        super().__init__(self.code)
+
+
+class AcpProtocolError(AcpError):
+    code = "grok_acp_protocol_error"
+
+
+class AcpTimeout(AcpError):
+    code = "grok_acp_timeout"
+
+
+class AcpPendingLimit(AcpError):
+    code = "grok_acp_pending_limit"
+
+
+class AcpProcessLost(AcpError):
+    code = "grok_acp_process_lost"
+
+
+class AcpStopped(AcpError):
+    code = "grok_acp_stopped"
+
+
+class AcpRemoteError(AcpError):
+    code = "grok_acp_remote_error"
+
+
+@dataclass(frozen=True)
+class AcpNotification:
+    generation: int
+    sequence: int
+    method: str
+    params: Dict[str, Any]
+
+
+@dataclass
+class _Pending:
+    event: threading.Event = field(default_factory=threading.Event)
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[AcpError] = None
+
+
+class _AcpMultiplexer:
+    """The only raw writer; accepts the private method enum, never strings."""
+
+    def __init__(
+        self,
+        write_bytes: Callable[[bytes], None],
+        generation: int,
+        max_pending: int = 16,
+        max_completed_ids: int = 128,
+        max_terminal_keys: int = 128,
+    ) -> None:
+        if generation <= 0 or max_pending <= 0 or max_completed_ids <= 0 or max_terminal_keys <= 0:
+            raise ValueError("invalid Grok ACP bounds")
+        self._write_bytes = write_bytes
+        self._generation = generation
+        self._max_pending = max_pending
+        self._lock = threading.RLock()
+        self._next_id = 1
+        self._next_sequence = 1
+        self._pending: Dict[int, _Pending] = {}
+        self._completed: Deque[int] = deque(maxlen=max_completed_ids)
+        self._completed_set: Set[int] = set()
+        self._terminal_keys: Deque[tuple[str, str]] = deque(maxlen=max_terminal_keys)
+        self._terminal_key_set: Set[tuple[str, str]] = set()
+        self._listeners: Dict[int, Callable[[AcpNotification], None]] = {}
+        self._next_listener_id = 1
+        self._terminal_error: Optional[AcpError] = None
+        self._stale_generation_count = 0
+        self._discarded_notification_count = 0
+
+    def request(
+        self,
+        method: _RequestMethod,
+        params: Dict[str, Any],
+        timeout_seconds: float,
+    ) -> Dict[str, Any]:
+        if not isinstance(method, _RequestMethod) or not isinstance(params, dict):
+            raise ValueError("Grok ACP method is not allowlisted")
+        if method is _RequestMethod.SESSION_CANCEL:
+            raise ValueError("session cancel is notification-only")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        with self._lock:
+            if self._terminal_error is not None:
+                raise self._terminal_error
+            if len(self._pending) >= self._max_pending:
+                raise AcpPendingLimit()
+            request_id = self._next_id
+            self._next_id += 1
+            pending = _Pending()
+            self._pending[request_id] = pending
+            payload = _encode_request(request_id, method.value, params)
+            try:
+                self._write_bytes(payload)
+            except Exception as error:
+                self._pending.pop(request_id, None)
+                self._record_completed(request_id)
+                raise AcpProcessLost() from error
+
+        if not pending.event.wait(timeout_seconds):
+            with self._lock:
+                current = self._pending.pop(request_id, None)
+                if current is pending:
+                    self._record_completed(request_id)
+                    raise AcpTimeout()
+            pending.event.wait(0)
+        if pending.error is not None:
+            raise pending.error
+        if pending.result is None:
+            raise AcpProtocolError("grok_acp_response_missing")
+        return pending.result
+
+    def notify(self, method: _RequestMethod, params: Dict[str, Any]) -> None:
+        if method is not _RequestMethod.SESSION_CANCEL or not isinstance(params, dict):
+            raise ValueError("Grok ACP notification is not allowlisted")
+        with self._lock:
+            if self._terminal_error is not None:
+                raise self._terminal_error
+            try:
+                self._write_bytes(_encode_notification(method.value, params))
+            except Exception as error:
+                raise AcpProcessLost() from error
+
+    def add_notification_listener(
+        self,
+        listener: Callable[[AcpNotification], None],
+    ) -> Callable[[], None]:
+        if not callable(listener):
+            raise ValueError("notification listener must be callable")
+        with self._lock:
+            listener_id = self._next_listener_id
+            self._next_listener_id += 1
+            self._listeners[listener_id] = listener
+
+        def remove() -> None:
+            with self._lock:
+                self._listeners.pop(listener_id, None)
+
+        return remove
+
+    def handle_object(self, message: Dict[str, Any], generation: int) -> None:
+        if generation != self._generation:
+            with self._lock:
+                self._stale_generation_count += 1
+            return
+        if message.get("jsonrpc") != "2.0":
+            raise AcpProtocolError("grok_acp_version_invalid")
+        if "id" in message:
+            if "method" in message:
+                raise AcpProtocolError("grok_acp_reverse_request_forbidden")
+            self._handle_response(message)
+            return
+        method = message.get("method")
+        params = message.get("params")
+        if not isinstance(method, str) or not isinstance(params, dict):
+            raise AcpProtocolError("grok_acp_message_shape_invalid")
+        if method not in NOTIFICATION_METHODS:
+            with self._lock:
+                self._discarded_notification_count += 1
+            return
+        if len(params) > 128:
+            raise AcpProtocolError("grok_acp_notification_too_wide")
+        if method == TERMINAL_NOTIFICATION_METHOD and not self._accept_terminal(params):
+            return
+        with self._lock:
+            notification = AcpNotification(
+                generation=self._generation,
+                sequence=self._next_sequence,
+                method=method,
+                params=dict(params),
+            )
+            self._next_sequence += 1
+            listeners = tuple(self._listeners.values())
+        for listener in listeners:
+            try:
+                listener(notification)
+            except Exception:
+                continue
+
+    def fail_all(self, error: AcpError) -> None:
+        with self._lock:
+            if self._terminal_error is not None:
+                return
+            self._terminal_error = error
+            pending = tuple(self._pending.items())
+            self._pending.clear()
+            for request_id, item in pending:
+                self._record_completed(request_id)
+                item.error = error
+                item.event.set()
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    @property
+    def stale_generation_count(self) -> int:
+        with self._lock:
+            return self._stale_generation_count
+
+    @property
+    def discarded_notification_count(self) -> int:
+        with self._lock:
+            return self._discarded_notification_count
+
+    def _handle_response(self, message: Dict[str, Any]) -> None:
+        request_id = message.get("id")
+        if not isinstance(request_id, int) or isinstance(request_id, bool) or request_id <= 0:
+            raise AcpProtocolError("grok_acp_response_id_invalid")
+        has_result = "result" in message
+        has_error = "error" in message
+        if has_result == has_error:
+            raise AcpProtocolError("grok_acp_response_shape_invalid")
+        with self._lock:
+            pending = self._pending.pop(request_id, None)
+            if pending is None:
+                if request_id in self._completed_set:
+                    raise AcpProtocolError("grok_acp_response_id_duplicate")
+                raise AcpProtocolError("grok_acp_response_id_unknown")
+            self._record_completed(request_id)
+            if has_result:
+                result = message.get("result")
+                if not isinstance(result, dict) or len(result) > 128:
+                    pending.error = AcpProtocolError("grok_acp_result_object_required")
+                else:
+                    pending.result = dict(result)
+            else:
+                pending.error = AcpRemoteError()
+            pending.event.set()
+
+    def _accept_terminal(self, params: Dict[str, Any]) -> bool:
+        session_id = params.get("sessionId")
+        prompt_id = params.get("promptId")
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 512:
+            raise AcpProtocolError("grok_acp_terminal_invalid")
+        if not isinstance(prompt_id, str) or not prompt_id or len(prompt_id) > 512:
+            raise AcpProtocolError("grok_acp_terminal_invalid")
+        key = (session_id, prompt_id)
+        with self._lock:
+            if key in self._terminal_key_set:
+                return False
+            if len(self._terminal_keys) == self._terminal_keys.maxlen:
+                expired = self._terminal_keys.popleft()
+                self._terminal_key_set.discard(expired)
+            self._terminal_keys.append(key)
+            self._terminal_key_set.add(key)
+        return True
+
+    def _record_completed(self, request_id: int) -> None:
+        if len(self._completed) == self._completed.maxlen:
+            expired = self._completed.popleft()
+            self._completed_set.discard(expired)
+        self._completed.append(request_id)
+        self._completed_set.add(request_id)
+
+
+def _encode_request(request_id: int, method: str, params: Dict[str, Any]) -> bytes:
+    return json.dumps(
+        {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8") + b"\n"
+
+
+def _encode_notification(method: str, params: Dict[str, Any]) -> bytes:
+    return json.dumps(
+        {"jsonrpc": "2.0", "method": method, "params": params},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8") + b"\n"

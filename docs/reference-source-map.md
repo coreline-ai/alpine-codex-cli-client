@@ -88,6 +88,20 @@ the project implementation is an independently written, narrower policy.
 | `crates/codegen/xai-grok-shell/src/auth/flow.rs` | `7560e34d74a3d26d2275763aeb2161f8139435ff156fa11d17392ce3223a3dc3` | clean | Device Flow environment selection |
 | `crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs` | `1235616b00d9ea96dcd74c5019e3430db8b64bb180cea0b1e1eb9713f0e5a001` | clean | raw initialize capability breadth and authenticated session boundary |
 
+### Phase 4 reviewed Grok ACP sources
+
+These clean upstream files were reviewed at the same pinned commit. They were not copied; the
+project owns a smaller Python transport and typed facade whose request allowlist is locked by
+`tests/fixtures/grok-acp-v1.0.0.json`.
+
+| Official source path | SHA-256 | Working tree | Reviewed contract |
+|---|---|---|---|
+| `crates/codegen/xai-acp-lib/src/message.rs` | `0854b79f14d2d4633f3cbae75e68a51cacc99bdd487049c8ffc0e466814a4e0e` | clean | typed request/notification method names and reverse client methods |
+| `crates/codegen/xai-grok-shell/src/extensions/auth.rs` | `2339a989883d9bbae27ead143d92be61f9002394b8c693b8a4be6bfbb0e266f1` | clean | OAuth extension methods and forbidden credential-export/key methods |
+| `crates/codegen/xai-grok-shell/src/agent/handlers/models.rs` | `5d0b6c3bf72d8415e6dde463fa783c840287084f8cbf8db08354bbe151827306` | clean | dynamic model list response source |
+| `crates/codegen/xai-grok-test-support/src/acp_client.rs` | `3dc042325de345a08395bf7024084de8e5d61f2fb8b9e4c3d1738abe94fc3792` | clean | new session, empty MCP list, model setter, prompt wire use |
+| `crates/codegen/xai-grok-shell/src/agent/mvp_agent/session_setup.rs` | `fa6667104c885a109c0767a1b4c329a2207c56744aafb504071f0d7a5ddc04cb` | clean | typed session resume/close implementation |
+
 ## Verification
 
 ```bash

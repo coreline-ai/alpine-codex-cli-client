@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "component": "official-grok-cli",
+  "version": "1.0.0",
+  "allowedRequestMethods": [
+    "authenticate",
+    "initialize",
+    "session/cancel",
+    "session/close",
+    "session/load",
+    "session/new",
+    "session/prompt",
+    "session/resume",
+    "session/set_model",
+    "x.ai/auth/cancel",
+    "x.ai/auth/get_url",
+    "x.ai/auth/info",
+    "x.ai/auth/logout",
+    "x.ai/models/list"
+  ],
+  "allowedNotificationMethods": [
+    "_x.ai/session/update",
+    "session/update",
+    "x.ai/session/prompt_complete"
+  ],
+  "forbiddenRequestMethods": [
+    "x.ai/auth/getBearerToken",
+    "x.ai/getApiKey",
+    "x.ai/setApiKey",
+    "x.ai/futureUnknown"
+  ],
+  "initializeResult": {
+    "_meta": {
+      "modelState": {
+        "currentModelId": "model-alpha",
+        "availableModels": [
+          {
+            "name": "Alpha",
+            "modelId": "model-alpha",
+            "meta": {
+              "totalContextTokens": 131072
+            }
+          },
+          {
+            "modelId": "model-beta",
+            "name": "Beta"
+          }
+        ]
+      },
+      "grokShell": true
+    },
+    "authMethods": [
+      {
+        "name": "Grok",
+        "id": "grok.com"
+      }
+    ],
+    "agentCapabilities": {
+      "sessionCapabilities": {
+        "resume": {},
+        "close": {}
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "loadSession": true
+    },
+    "protocolVersion": "1"
+  }
+}

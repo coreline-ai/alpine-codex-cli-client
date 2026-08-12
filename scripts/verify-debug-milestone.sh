@@ -28,6 +28,7 @@ python3 scripts/verify-codex-protocol-fixture.py --project-root "$project_root"
 python3 scripts/verify-debug-clean-room.py --project-root "$project_root" --apk "$apk_path"
 python3 scripts/verify-grok-cli-artifact.py --project-root "$project_root" --apk "$apk_path"
 python3 scripts/verify-grok-profile.py --project-root "$project_root" --apk "$apk_path"
+python3 scripts/verify-grok-acp-contract.py --project-root "$project_root"
 sh scripts/verify-reference-source-map.sh "$reference_repo"
 sh scripts/verify-runtime-reference-manifest.sh "$reference_repo"
 git diff --check

@@ -70,3 +70,30 @@ directories/executable and `0600` for the profile.
 
 No authenticate request, browser action, Device Code, account access, model inference, prompt, logout,
 credential mutation, app uninstall, or app-data clear occurred in this phase.
+
+## ACP supervisor boundary
+
+The Phase 4 supervisor owns one process generation and implements the lifecycle
+`STOPPED → STARTING → INITIALIZING → READY → STOPPING/FAILED`. JSONL decoding is strict UTF-8,
+object-only, and limited to 1 MiB per line. Request IDs are monotonic, pending requests are bounded,
+writes are serialized, timeouts are fixed by method, and unknown, duplicate, late, or reverse
+agent-to-client requests fail the active generation.
+
+The public supervisor has typed functions for only the pinned allowlist. It has no public
+`request(method, params)` function. Session creation always sends an empty MCP list and the fixed
+work directory. Android input cannot select an executable, environment, path, profile, or protocol
+method. Unknown notifications are counted then dropped; recognized notifications carry a local
+generation and sequence. Duplicate terminal notifications for the same session/prompt are emitted
+once.
+
+Raw initialize metadata is reduced to protocol version, the sole `grok.com` auth method, bounded
+model summaries/current model, and load/resume/close booleans. Advertised MCP, filesystem,
+terminal, tool, hostname, account, and other extension metadata are discarded. Stderr content is
+never retained at all: only a bounded byte count and truncation bit are exposed as a stable
+diagnostic, so a URL, account value, prompt, or credential split across chunks cannot survive.
+
+The contract verifier fixes both allowed and forbidden methods to Grok CLI 1.0.0 and scans the
+shipping Python package to ensure forbidden credential/key method strings are absent. Credential-free
+fake ACP tests cover split/coalesced/malformed/oversized lines, unknown/duplicate IDs, pending bounds,
+timeouts, late responses, process loss, generation mismatch, notification filtering/deduplication,
+stderr chunk boundaries, and active-request shutdown/reaping. No OAuth or inference was performed.
