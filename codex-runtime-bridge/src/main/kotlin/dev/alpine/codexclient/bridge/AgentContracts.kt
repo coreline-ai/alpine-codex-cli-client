@@ -1,0 +1,97 @@
+package dev.alpine.codexclient.bridge
+
+/** Fixed Agent identifiers accepted on storage and Gateway wire boundaries. */
+enum class AgentId(val wireValue: String) {
+    CODEX("codex"),
+    GROK("grok"),
+    ;
+
+    companion object {
+        fun fromWire(value: String?): AgentId? = entries.firstOrNull { it.wireValue == value }
+    }
+}
+
+/** Version rules for migrating the existing Codex-only encrypted conversation state. */
+object AgentStorageSchema {
+    const val CURRENT_VERSION = 2
+    private const val CODEX_ONLY_VERSION = 1
+
+    fun parseVersion(value: Int?): Int? = when (value) {
+        null -> CODEX_ONLY_VERSION
+        CODEX_ONLY_VERSION, CURRENT_VERSION -> value
+        else -> null
+    }
+
+    fun resolveAgentId(schemaVersion: Int, storedValue: String?): AgentId? = when (schemaVersion) {
+        CODEX_ONLY_VERSION -> if (storedValue.isNullOrEmpty()) AgentId.CODEX else AgentId.fromWire(storedValue)
+        CURRENT_VERSION -> AgentId.fromWire(storedValue)
+        else -> null
+    }
+}
+
+data class AgentCapabilities(
+    val deviceOAuth: Boolean,
+    val dynamicModels: Boolean,
+    val streaming: Boolean,
+    val stop: Boolean,
+    val resume: Boolean,
+)
+
+data class AgentAccount(
+    val agentId: AgentId,
+    val authenticated: Boolean,
+    val requiresAuth: Boolean,
+)
+
+data class AgentModel(
+    val agentId: AgentId,
+    val id: String,
+    val displayName: String,
+    val isDefault: Boolean,
+)
+
+data class AgentLogin(
+    val agentId: AgentId,
+    val requestId: String,
+    val state: String,
+    val verificationUrl: String? = null,
+    val userCode: String? = null,
+    val expiresInSeconds: Int? = null,
+    val pollIntervalSeconds: Int? = null,
+)
+
+data class AgentConversationBinding(
+    val agentId: AgentId,
+    val conversationId: String,
+    val backendSessionId: String,
+    val modelId: String,
+    val processGeneration: Long,
+)
+
+sealed interface AgentTurnEvent {
+    val agentId: AgentId
+    val requestId: String
+
+    data class Started(
+        override val agentId: AgentId,
+        override val requestId: String,
+        val conversationId: String?,
+    ) : AgentTurnEvent
+
+    data class Delta(
+        override val agentId: AgentId,
+        override val requestId: String,
+        val text: String,
+    ) : AgentTurnEvent
+
+    data class Completed(
+        override val agentId: AgentId,
+        override val requestId: String,
+    ) : AgentTurnEvent
+
+    data class Failed(
+        override val agentId: AgentId,
+        override val requestId: String,
+        val code: String,
+    ) : AgentTurnEvent
+}

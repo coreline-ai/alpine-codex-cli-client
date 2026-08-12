@@ -12,6 +12,8 @@ import unittest
 
 from codex_gateway.app_server.process import AppServerSupervisor
 from codex_gateway.app_server.protocol import CodexAppServerProtocol
+from codex_gateway.agents.codex import CodexAgentAdapter
+from codex_gateway.agents.contracts import AgentId
 import codex_gateway.gateway as gateway_module
 from codex_gateway.gateway import (
     LOOPBACK_HOST,
@@ -176,8 +178,15 @@ class GatewayHttpTest(unittest.TestCase):
     def test_gateway_owned_binding_survives_restart_and_logout_clears_it(self):
         with tempfile.TemporaryDirectory() as directory:
             store_path = os.path.join(directory, "conversation-bindings.v1.json")
+            with open(store_path, "w", encoding="utf-8") as destination:
+                json.dump(
+                    [{"conversation_id": "conversation-persisted", "thread_id": "thread-gateway-1"}],
+                    destination,
+                )
             self.harness = GatewayHarness("gateway_chat", store_path)
-            connection, response = self.harness.start_stream(chat("conversation-persisted"))
+            resume = chat("conversation-persisted")
+            resume["resume_existing"] = True
+            connection, response = self.harness.start_stream(resume)
             self.assertEqual(200, response.status)
             sse_values(response.read())
             connection.close()
@@ -185,11 +194,14 @@ class GatewayHttpTest(unittest.TestCase):
             self.assertEqual(0o600, stat.S_IMODE(os.stat(store_path).st_mode))
             with open(store_path, "r", encoding="utf-8") as source:
                 bindings = json.load(source)
-            self.assertEqual(["conversation_id", "thread_id"], sorted(bindings[0].keys()))
+            self.assertEqual(2, bindings["schema_version"])
+            self.assertEqual(
+                ["agent_id", "conversation_id", "thread_id"],
+                sorted(bindings["bindings"][0].keys()),
+            )
+            self.assertEqual("codex", bindings["bindings"][0]["agent_id"])
             self.harness.close()
             self.harness = GatewayHarness("gateway_chat", store_path)
-            resume = chat("conversation-persisted")
-            resume["resume_existing"] = True
             connection, response = self.harness.start_stream(resume)
             self.assertEqual(200, response.status)
             sse_values(response.read())
@@ -206,7 +218,16 @@ class GatewayHttpTest(unittest.TestCase):
             self.assertEqual(200, status)
             self.assertEqual("logged_out", logged_out["status"])
             with open(store_path, "r", encoding="utf-8") as source:
-                self.assertEqual([], json.load(source))
+                self.assertEqual({"schema_version": 2, "bindings": []}, json.load(source))
+
+    def test_codex_agent_adapter_preserves_protocol_and_normalizes_contracts(self):
+        harness = self.open("gateway_auth")
+        adapter = CodexAgentAdapter(harness.service)
+        self.assertEqual(AgentId.CODEX, adapter.agent_id)
+        self.assertTrue(adapter.is_ready())
+        self.assertFalse(adapter.activity().active_login)
+        self.assertTrue(adapter.account().authenticated)
+        self.assertEqual(["model-alpha", "model-beta"], [model.model_id for model in adapter.models()])
 
     def test_model_pagination_deduplication_empty_and_malformed(self):
         harness = self.open("gateway_auth")

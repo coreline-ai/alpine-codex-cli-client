@@ -3,6 +3,7 @@ package dev.alpine.codexclient
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.alpine.codexclient.bridge.AgentId
 import dev.alpine.codexclient.bridge.CodexGatewayChatEvent
 import dev.alpine.codexclient.bridge.CodexGatewayChatTurn
 import dev.alpine.codexclient.bridge.CodexRuntimeLifecycle
@@ -48,6 +49,7 @@ data class ConversationSummary(
     val conversationId: String,
     val label: String,
     val selectedModelId: String?,
+    val agentId: AgentId = AgentId.CODEX,
 )
 
 data class DeviceCodeChallenge(
@@ -88,7 +90,9 @@ class CodexChatViewModel @JvmOverloads constructor(
     private val conversationStore = EncryptedConversationStore(application)
     private val restoredConversationState = conversationStore.load()
     private val archivedConversations = LinkedHashMap<String, StoredConversation>().apply {
-        restoredConversationState?.conversations?.forEach { put(it.conversationId, it) }
+        restoredConversationState?.conversations
+            ?.filter { it.agentId == AgentId.CODEX }
+            ?.forEach { put(it.conversationId, it) }
     }
     private val _state = MutableStateFlow(restoreState(restoredConversationState))
     val state: StateFlow<CodexChatUiState> = _state.asStateFlow()
@@ -525,12 +529,15 @@ class CodexChatViewModel @JvmOverloads constructor(
 
     private fun restoreState(stored: StoredConversationState?): CodexChatUiState {
         val active = stored?.activeConversationId?.let { activeId ->
-            stored.conversations.firstOrNull { it.conversationId == activeId }
+            stored.conversations.firstOrNull {
+                it.agentId == AgentId.CODEX && it.conversationId == activeId
+            }
         }
+        val codexConversations = stored?.conversations?.filter { it.agentId == AgentId.CODEX }.orEmpty()
         return CodexChatUiState(
             selectedModelId = active?.selectedModelId,
             conversationId = active?.conversationId,
-            conversations = stored?.conversations?.asReversed()?.map(::toSummary).orEmpty(),
+            conversations = codexConversations.asReversed().map(::toSummary),
             messages = active?.messages?.map { ChatMessage(UUID.randomUUID().toString(), it.role, it.text) }.orEmpty(),
         )
     }
@@ -542,6 +549,7 @@ class CodexChatViewModel @JvmOverloads constructor(
             archivedConversations[conversationId] = StoredConversation(
                 conversationId = conversationId,
                 selectedModelId = current.selectedModelId,
+                agentId = AgentId.CODEX,
                 messages = current.messages.takeLast(MAX_STORED_MESSAGES).map { message ->
                     StoredChatMessage(message.role, message.text.take(MAX_STORED_MESSAGE_CHARS))
                 },
@@ -572,6 +580,7 @@ class CodexChatViewModel @JvmOverloads constructor(
             conversationId = conversation.conversationId,
             label = firstUserText.take(MAX_CONVERSATION_LABEL_CHARS).ifBlank { "대화" },
             selectedModelId = conversation.selectedModelId,
+            agentId = conversation.agentId,
         )
     }
 

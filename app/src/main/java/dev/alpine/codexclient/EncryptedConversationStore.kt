@@ -3,6 +3,8 @@ package dev.alpine.codexclient
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import dev.alpine.codexclient.bridge.AgentId
+import dev.alpine.codexclient.bridge.AgentStorageSchema
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -20,6 +22,7 @@ internal data class StoredConversation(
     val conversationId: String,
     val selectedModelId: String?,
     val messages: List<StoredChatMessage>,
+    val agentId: AgentId = AgentId.CODEX,
 )
 
 internal data class StoredConversationState(
@@ -106,6 +109,7 @@ internal class EncryptedConversationStore(context: Context) {
             conversations.put(encodeConversation(conversation))
         }
         return JSONObject()
+            .put("schema_version", AgentStorageSchema.CURRENT_VERSION)
             .put("active_conversation_id", value.activeConversationId)
             .put("conversations", conversations)
     }
@@ -118,17 +122,24 @@ internal class EncryptedConversationStore(context: Context) {
             messages.put(JSONObject().put("role", message.role.name).put("text", message.text))
         }
         return JSONObject()
+            .put("agent_id", value.agentId.wireValue)
             .put("conversation_id", value.conversationId)
             .put("selected_model_id", value.selectedModelId)
             .put("messages", messages)
     }
 
     private fun parse(value: JSONObject): StoredConversationState? {
+        val schemaVersion = AgentStorageSchema.parseVersion(
+            value.optInt("schema_version").takeIf { value.has("schema_version") },
+        ) ?: return null
         val rawConversations = value.optJSONArray("conversations") ?: return null
         if (rawConversations.length() > MAX_CONVERSATIONS) return null
         val conversations = mutableListOf<StoredConversation>()
         for (index in 0 until rawConversations.length()) {
-            val conversation = parseConversation(rawConversations.optJSONObject(index) ?: return null) ?: return null
+            val conversation = parseConversation(
+                rawConversations.optJSONObject(index) ?: return null,
+                schemaVersion,
+            ) ?: return null
             if (conversations.none { it.conversationId == conversation.conversationId }) {
                 conversations += conversation
             }
@@ -138,7 +149,11 @@ internal class EncryptedConversationStore(context: Context) {
         return StoredConversationState(activeConversationId, conversations)
     }
 
-    private fun parseConversation(value: JSONObject): StoredConversation? {
+    private fun parseConversation(value: JSONObject, schemaVersion: Int): StoredConversation? {
+        val agentId = AgentStorageSchema.resolveAgentId(
+            schemaVersion,
+            value.optString("agent_id", "").takeIf { value.has("agent_id") },
+        ) ?: return null
         val conversationId = value.optString("conversation_id", "")
             .takeIf { it.isNotEmpty() && it.length <= MAX_CONVERSATION_ID_LENGTH }
             ?: return null
@@ -154,7 +169,7 @@ internal class EncryptedConversationStore(context: Context) {
                 add(StoredChatMessage(role, text))
             }
         }
-        return StoredConversation(conversationId, selectedModelId, messages)
+        return StoredConversation(conversationId, selectedModelId, messages, agentId)
     }
 
     private companion object {

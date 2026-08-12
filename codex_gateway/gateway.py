@@ -119,6 +119,19 @@ class CodexGatewayService:
         if active is not None:
             self.interrupt(active.request_id)
 
+    def backend_ready(self) -> bool:
+        """Returns protocol readiness without conflating it with Gateway process readiness."""
+        return self._protocol.is_ready
+
+    def activity_snapshot(self) -> Tuple[bool, bool]:
+        """Returns only busy booleans; no login, thread, turn, or account identifier escapes."""
+        with self._lock:
+            self._expire_login_locked(time.monotonic())
+            return (
+                self._active_login_id is not None,
+                self._active_turn is not None or self._turn_reservation,
+            )
+
     def health(self) -> Dict[str, str]:
         if not self._runtime_ready():
             raise GatewayError(503, "runtime_not_ready")
@@ -678,11 +691,20 @@ class CodexGatewayService:
                 raw = json.load(source)
         except (OSError, ValueError, TypeError):
             return OrderedDict()
-        if not isinstance(raw, list):
+        if isinstance(raw, list):
+            # v1 was a bare Codex-only list. Missing agent_id migrates to Codex in memory.
+            bindings = raw
+        elif isinstance(raw, dict) and raw.get("schema_version") == 2:
+            bindings = raw.get("bindings")
+            if not isinstance(bindings, list):
+                return OrderedDict()
+        else:
             return OrderedDict()
         values: "OrderedDict[str, str]" = OrderedDict()
-        for entry in raw[-MAX_CONVERSATIONS:]:
+        for entry in bindings[-MAX_CONVERSATIONS:]:
             if not isinstance(entry, dict):
+                continue
+            if entry.get("agent_id", "codex") != "codex":
                 continue
             conversation_id = entry.get("conversation_id")
             thread_id = entry.get("thread_id")
@@ -701,15 +723,22 @@ class CodexGatewayService:
             return
         directory = os.path.dirname(path)
         temporary = path + ".tmp-" + secrets.token_hex(8)
-        values = [
-            {"conversation_id": conversation_id, "thread_id": thread_id}
-            for conversation_id, thread_id in self._threads.items()
-        ]
+        payload = {
+            "schema_version": 2,
+            "bindings": [
+                {
+                    "agent_id": "codex",
+                    "conversation_id": conversation_id,
+                    "thread_id": thread_id,
+                }
+                for conversation_id, thread_id in self._threads.items()
+            ],
+        }
         try:
             os.makedirs(directory, mode=0o700, exist_ok=True)
             with open(temporary, "w", encoding="utf-8") as destination:
                 os.chmod(temporary, 0o600)
-                json.dump(values, destination, separators=(",", ":"))
+                json.dump(payload, destination, separators=(",", ":"))
                 destination.flush()
                 os.fsync(destination.fileno())
             os.replace(temporary, path)
