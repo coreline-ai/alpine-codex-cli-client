@@ -138,6 +138,10 @@ def handle(message):
     if method == "session/cancel" and request_id is None:
         return True
     if method == "authenticate":
+        meta = params.get("_meta", {})
+        if not isinstance(meta.get("request_seq"), int) or "use_oauth" in meta:
+            emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602}})
+            return True
         emit(response(request_id, {}))
         return True
     if method == "x.ai/auth/get_url":

@@ -13,6 +13,8 @@ from codex_gateway.agents.contracts import (
     AgentTurnHandle,
 )
 from codex_gateway.agents.router import AgentRouter, AgentRoutingError
+from codex_gateway.agents.grok import GrokAdapterError, GrokAgentAdapter
+from codex_gateway.agents.service import AgentGatewayService, AgentServiceError
 
 __all__ = (
     "AgentAccount",
@@ -27,4 +29,8 @@ __all__ = (
     "AgentRoutingError",
     "AgentTurnEvent",
     "AgentTurnHandle",
+    "GrokAdapterError",
+    "GrokAgentAdapter",
+    "AgentGatewayService",
+    "AgentServiceError",
 )

@@ -136,12 +136,28 @@ def parse_initialize_result(result: Mapping[str, Any]) -> GrokInitializeState:
 
 
 def parse_model_state(value: Mapping[str, Any]) -> tuple[Tuple[GrokModelSummary, ...], str]:
+    models, current = parse_model_catalog(value, require_current=True)
+    if current is None:
+        raise ValueError("grok_model_state_invalid")
+    return models, current
+
+
+def parse_model_catalog(
+    value: Mapping[str, Any],
+    *,
+    require_current: bool = False,
+) -> tuple[Tuple[GrokModelSummary, ...], str | None]:
+    """Normalize a dynamic model state; duplicates keep the first official row."""
+
     _bounded_mapping(value)
     available = value.get("availableModels")
     current = value.get("currentModelId")
-    if not isinstance(available, list) or not available or len(available) > MAX_MODEL_COUNT:
+    if not isinstance(available, list) or len(available) > MAX_MODEL_COUNT:
         raise ValueError("grok_model_state_invalid")
-    current_id = _identifier(current)
+    if current is None and not require_current:
+        current_id = None
+    else:
+        current_id = _identifier(current)
     parsed: list[GrokModelSummary] = []
     seen: set[str] = set()
     for item in available:
@@ -153,10 +169,10 @@ def parse_model_state(value: Mapping[str, Any]) -> tuple[Tuple[GrokModelSummary,
         if not isinstance(name, str) or not name or len(name) > MAX_MODEL_NAME_LENGTH:
             raise ValueError("grok_model_state_invalid")
         if model_id in seen:
-            raise ValueError("grok_model_state_invalid")
+            continue
         seen.add(model_id)
         parsed.append(GrokModelSummary(model_id=model_id, display_name=name))
-    if current_id not in seen:
+    if current_id is not None and current_id not in seen:
         raise ValueError("grok_model_state_invalid")
     return tuple(parsed), current_id
 

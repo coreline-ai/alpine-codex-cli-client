@@ -172,14 +172,28 @@ class GrokSupervisorTest(unittest.TestCase):
             "invalid_utf8",
             "oversized",
             "unknown_id",
-            "duplicate_id",
             "reverse_request",
         ):
-            self.supervisor = make_supervisor(mode, timeout_scale=0.01)
-            with self.assertRaises(GrokSupervisorError):
-                self.supervisor.start()
-            self.assertEqual(GrokSupervisorState.FAILED, self.supervisor.state, mode)
-            self.supervisor.stop()
+            with self.subTest(mode=mode):
+                self.supervisor = make_supervisor(mode, timeout_scale=0.01)
+                with self.assertRaises(GrokSupervisorError):
+                    self.supervisor.start()
+                self.assertEqual(GrokSupervisorState.FAILED, self.supervisor.state)
+                self.supervisor.stop()
+
+        # A valid initialize response may release start() immediately before the stdout reader
+        # consumes the adjacent duplicate line. The invariant is that the duplicate retires the
+        # generation as soon as it is observed, not which of those two threads wins scheduling.
+        self.supervisor = make_supervisor("duplicate_id", timeout_scale=0.01)
+        try:
+            self.supervisor.start()
+        except GrokSupervisorError:
+            pass
+        deadline = time.monotonic() + 1.0
+        while self.supervisor.state is not GrokSupervisorState.FAILED and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(GrokSupervisorState.FAILED, self.supervisor.state)
+        self.supervisor.stop()
 
     def test_timeout_late_response_and_process_crash_are_bounded(self):
         self.start("late_response", timeout_scale=0.01)
@@ -218,6 +232,14 @@ class GrokSupervisorTest(unittest.TestCase):
         terminal = [n for n in notifications if n.method == "x.ai/session/prompt_complete"]
         self.assertEqual(1, len(terminal))
         self.assertEqual(sorted(n.sequence for n in notifications), [n.sequence for n in notifications])
+
+    def test_authenticate_uses_scoped_sequence_without_forcing_loopback_oauth(self):
+        self.start()
+        self.assertEqual({}, self.supervisor.authenticate(17))
+        with self.assertRaises(ValueError):
+            self.supervisor.authenticate(0)
+        with self.assertRaises(ValueError):
+            self.supervisor.authenticate(True)
 
     def test_shutdown_cancels_active_request_and_reaps_child(self):
         self.start("hold", timeout_scale=1.0)

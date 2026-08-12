@@ -250,14 +250,19 @@ class GrokAcpSupervisor:
     ) -> Callable[[], None]:
         return self._require_rpc().add_notification_listener(listener)
 
-    def authenticate(self) -> Dict[str, Any]:
+    def authenticate(self, request_sequence: int) -> Dict[str, Any]:
+        if not isinstance(request_sequence, int) or isinstance(request_sequence, bool) or request_sequence <= 0:
+            raise ValueError("request sequence invalid")
         return self._typed_request(
             _RequestMethod.AUTHENTICATE,
-            {"methodId": AUTH_METHOD_ID},
+            {
+                "methodId": AUTH_METHOD_ID,
+                "_meta": {"request_seq": request_sequence},
+            },
         )
 
     def get_auth_url(self) -> Dict[str, Any]:
-        return self._typed_request(_RequestMethod.AUTH_URL, {"mode": "device"})
+        return self._typed_request(_RequestMethod.AUTH_URL, {})
 
     def cancel_auth(self, request_sequence: int) -> Dict[str, Any]:
         if not isinstance(request_sequence, int) or isinstance(request_sequence, bool) or request_sequence <= 0:

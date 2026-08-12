@@ -77,6 +77,16 @@ class AgentRouter:
         with self._lock:
             return self._adapters[self._selected_agent]
 
+    def adapter_for(self, value: object, *, require_selected: bool = True) -> AgentAdapter:
+        parsed = self._parse_agent(value)
+        with self._lock:
+            adapter = self._adapters.get(parsed)
+            if adapter is None:
+                raise AgentRoutingError(404, "agent_unavailable")
+            if require_selected and parsed != self._selected_agent:
+                raise AgentRoutingError(409, "agent_not_selected")
+            return adapter
+
     def select(self, value: object) -> AgentRouterState:
         try:
             target_id = value if isinstance(value, AgentId) else AgentId.parse_exact(value)

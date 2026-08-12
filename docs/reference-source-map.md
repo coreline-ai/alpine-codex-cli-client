@@ -102,6 +102,23 @@ project owns a smaller Python transport and typed facade whose request allowlist
 | `crates/codegen/xai-grok-test-support/src/acp_client.rs` | `3dc042325de345a08395bf7024084de8e5d61f2fb8b9e4c3d1738abe94fc3792` | clean | new session, empty MCP list, model setter, prompt wire use |
 | `crates/codegen/xai-grok-shell/src/agent/mvp_agent/session_setup.rs` | `fa6667104c885a109c0767a1b4c329a2207c56744aafb504071f0d7a5ddc04cb` | clean | typed session resume/close implementation |
 
+### Phase 5 reviewed Grok OAuth, model, and session sources
+
+These files were reviewed from clean upstream commit
+`be713136d2a69080743a3f6b3c72077057e5948f`. No upstream implementation was copied. They define
+the wire and race behavior narrowed by the project-owned typed adapter and fake lifecycle tests.
+
+| Official source path | SHA-256 | Working tree | Reviewed contract |
+|---|---|---|---|
+| `crates/codegen/xai-grok-shell/src/auth/device_code.rs` | `d6bf74ae624064b2df38102729332402a6a924705326de4fe458d0d4b1037c6b` | clean | complete Device URL is sent before detached browser launch; code embedding remains CLI-owned |
+| `crates/codegen/xai-grok-shell/src/auth/config.rs` | `11ad3d9667c9ec69e025d99b042bd0f4d5ff495b27f50d18a21623e0a463dfc4` | clean | fixed production issuer `https://auth.x.ai` used as the Android URL host allowlist |
+| `crates/codegen/xai-grok-shell/src/auth/single_flight.rs` | `44846af314b65c7a13132f3d2f2d21f3bc10468063d6b69e5969dda422064304` | clean | sequence-scoped cancellation and stale finisher behavior |
+| `crates/codegen/xai-grok-shell/src/agent/mvp_agent/mod.rs` | `95860fa6046a3724c7791de65956f0be7aca8582c567d961da70f2a92118f840` | clean | authenticate `_meta.request_seq`; omitting `use_oauth` preserves configured Device transport |
+| `crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs` | `1235616b00d9ea96dcd74c5019e3430db8b64bb180cea0b1e1eb9713f0e5a001` | clean | authenticate single-flight and session request handling |
+| `crates/codegen/xai-grok-shell/src/extensions/auth.rs` | `2339a989883d9bbae27ead143d92be61f9002394b8c693b8a4be6bfbb0e266f1` | clean | raw get-URL/info/logout envelopes and sequence-scoped cancel |
+| `crates/codegen/xai-grok-shell/src/agent/handlers/models.rs` | `5d0b6c3bf72d8415e6dde463fa783c840287084f8cbf8db08354bbe151827306` | clean | live `x.ai/models/list` response source |
+| `crates/codegen/xai-grok-shell/src/session/result.rs` | `5b5600feafc2e9f204b96b5e558aa66c9d7fa23ec1763dfd18ff77fa1e2996c5` | clean | extension result envelope used by model list |
+
 ## Verification
 
 ```bash

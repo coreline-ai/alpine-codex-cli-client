@@ -1,0 +1,348 @@
+from __future__ import annotations
+
+from dataclasses import replace
+import threading
+import time
+import unittest
+
+from codex_gateway.agents.contracts import AgentConversationBinding, AgentId
+from codex_gateway.agents.grok import GrokAdapterError, GrokAgentAdapter
+from codex_gateway.grok_acp.process import GrokSupervisorState
+from codex_gateway.grok_acp.rpc import AcpNotification
+
+
+def model_state(rows=None, current="model-alpha"):
+    if rows is None:
+        rows = [
+            {"modelId": "model-alpha", "name": "Alpha"},
+            {"modelId": "model-beta", "name": "Beta"},
+        ]
+    return {"result": {"availableModels": rows, "currentModelId": current}}
+
+
+def chat(conversation_id="conversation-one", model="model-alpha", resume=False):
+    return {
+        "agent_id": "grok",
+        "conversation_id": conversation_id,
+        "resume_existing": resume,
+        "model": model,
+        "stream": True,
+        "messages": [{"role": "user", "content": "fixture prompt"}],
+    }
+
+
+class FakeGrokSupervisor:
+    def __init__(self):
+        self.state = GrokSupervisorState.READY
+        self.generation = 7
+        self.initialize_state = None
+        self.authenticated = False
+        self.auth_info_payload = {}
+        self.auth_url = "https://auth.x.ai/device?challenge=fixture"
+        self.auth_mode = "device"
+        self.model_response = model_state()
+        self.authenticate_calls = []
+        self.cancel_auth_calls = []
+        self.call_order = []
+        self.authenticate_entered = threading.Event()
+        self.authenticate_release = threading.Event()
+        self.authenticate_release.set()
+        self.authenticate_ignores_cancel = False
+        self.listeners = []
+        self.new_session_calls = []
+        self.resume_session_calls = []
+        self.set_model_calls = []
+        self.prompt_calls = []
+        self.cancel_session_calls = []
+        self.close_session_calls = []
+        self.logout_calls = 0
+
+    def start(self):
+        self.state = GrokSupervisorState.READY
+        self.generation += 1
+
+    def stop(self, timeout_seconds=5.0):
+        self.state = GrokSupervisorState.STOPPED
+
+    def add_notification_listener(self, listener):
+        self.listeners.append(listener)
+
+        def remove():
+            if listener in self.listeners:
+                self.listeners.remove(listener)
+
+        return remove
+
+    def authenticate(self, request_sequence):
+        self.authenticate_calls.append(request_sequence)
+        self.call_order.append("authenticate")
+        self.authenticate_entered.set()
+        self.authenticate_release.wait(2.0)
+        if request_sequence in self.cancel_auth_calls and not self.authenticate_ignores_cancel:
+            raise RuntimeError("cancelled")
+        self.authenticated = True
+        return {"account": "discard-me"}
+
+    def get_auth_url(self):
+        self.call_order.append("get_url")
+        if not self.authenticate_entered.wait(1.0):
+            raise RuntimeError("authenticate not started")
+        return {
+            "auth_url": self.auth_url,
+            "mode": self.auth_mode,
+            "user_code": "must-not-be-read",
+        }
+
+    def cancel_auth(self, request_sequence):
+        self.cancel_auth_calls.append(request_sequence)
+        self.authenticate_release.set()
+        return {"cancelled": True, "account": "discard-me"}
+
+    def auth_info(self):
+        result = dict(self.auth_info_payload)
+        result["methodId"] = "grok.com" if self.authenticated else None
+        return result
+
+    def logout(self):
+        self.logout_calls += 1
+        self.authenticated = False
+        return {
+            "ok": True,
+            "email": "private@example.invalid",
+            "profileImageUrl": "https://private.invalid/image",
+            "token": "private-token",
+        }
+
+    def list_models(self):
+        return self.model_response
+
+    def new_session(self, working_directory, model_id=None):
+        self.new_session_calls.append((working_directory, model_id))
+        return {"sessionId": "session-" + str(len(self.new_session_calls))}
+
+    def load_session(self, session_id, working_directory):
+        return {}
+
+    def resume_session(self, session_id, working_directory):
+        self.resume_session_calls.append((session_id, working_directory))
+        return {}
+
+    def set_session_model(self, session_id, model_id):
+        self.set_model_calls.append((session_id, model_id))
+        return {}
+
+    def prompt(self, session_id, text):
+        self.prompt_calls.append((session_id, text))
+        return {"stopReason": "end_turn"}
+
+    def cancel_session(self, session_id):
+        self.cancel_session_calls.append(session_id)
+
+    def close_session(self, session_id):
+        self.close_session_calls.append(session_id)
+        return {}
+
+    def emit(self, method, params, sequence=1, generation=None):
+        notification = AcpNotification(
+            generation=self.generation if generation is None else generation,
+            sequence=sequence,
+            method=method,
+            params=params,
+        )
+        for listener in tuple(self.listeners):
+            listener(notification)
+
+
+class GrokLoginTest(unittest.TestCase):
+    def setUp(self):
+        self.supervisor = FakeGrokSupervisor()
+        self.adapter = GrokAgentAdapter("/workspace", self.supervisor)
+        self.adapter.activate()
+
+    def tearDown(self):
+        self.supervisor.authenticate_release.set()
+        deadline = time.monotonic() + 1.0
+        while self.adapter.activity().active_login and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+    def test_authenticate_starts_before_get_url_and_only_complete_device_url_is_returned(self):
+        self.supervisor.authenticate_release.clear()
+        login = self.adapter.start_device_login()
+        self.assertEqual(["authenticate", "get_url"], self.supervisor.call_order)
+        self.assertEqual("pending", login.state)
+        self.assertEqual(self.supervisor.auth_url, login.verification_url)
+        self.assertIsNone(login.user_code)
+        self.assertNotIn(self.supervisor.auth_url, repr(self.adapter.login_status(login.request_id)))
+
+        self.supervisor.authenticate_release.set()
+        deadline = time.monotonic() + 1.0
+        while self.adapter.login_status(login.request_id).state == "pending" and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual("authenticated", self.adapter.login_status(login.request_id).state)
+        self.assertEqual([1], self.supervisor.authenticate_calls)
+
+    def test_duplicate_click_single_flight_cancel_and_late_success_stays_cancelled(self):
+        self.supervisor.authenticate_release.clear()
+        self.supervisor.authenticate_ignores_cancel = True
+        login = self.adapter.start_device_login()
+        with self.assertRaises(GrokAdapterError) as error:
+            self.adapter.start_device_login()
+        self.assertEqual("login_already_active", error.exception.code)
+        self.assertEqual([1], self.supervisor.authenticate_calls)
+
+        cancelled = self.adapter.cancel_login(login.request_id)
+        self.assertEqual("cancelled", cancelled.state)
+        self.assertEqual([1], self.supervisor.cancel_auth_calls)
+        with self.assertRaises(GrokAdapterError):
+            self.adapter.cancel_login(login.request_id)
+        self.supervisor.authenticate_release.set()
+        time.sleep(0.05)
+        self.assertEqual("cancelled", self.adapter.login_status(login.request_id).state)
+        self.assertEqual([1], self.supervisor.cancel_auth_calls)
+
+    def test_invalid_oversized_non_https_or_fragment_url_is_never_returned(self):
+        invalid = (
+            "http://auth.x.ai/device?challenge=x",
+            "https://evil.invalid/device?challenge=x",
+            "https://accounts.x.ai/device?challenge=x",
+            "https://user@auth.x.ai/device?challenge=x",
+            "https://auth.x.ai:444/device?challenge=x",
+            "https://auth.x.ai/device?challenge=x#fragment",
+            "https://auth.x.ai/" + "x" * 2050,
+        )
+        for url in invalid:
+            supervisor = FakeGrokSupervisor()
+            supervisor.auth_url = url
+            supervisor.authenticate_release.clear()
+            adapter = GrokAgentAdapter("/workspace", supervisor)
+            adapter.activate()
+            with self.assertRaises(GrokAdapterError) as error:
+                adapter.start_device_login()
+            self.assertEqual("grok_login_challenge_invalid", error.exception.code)
+            self.assertEqual([1], supervisor.cancel_auth_calls)
+
+        supervisor = FakeGrokSupervisor()
+        supervisor.auth_mode = "loopback"
+        supervisor.authenticate_release.clear()
+        adapter = GrokAgentAdapter("/workspace", supervisor)
+        adapter.activate()
+        with self.assertRaises(GrokAdapterError):
+            adapter.start_device_login()
+
+    def test_sensitive_account_and_logout_fields_are_discarded(self):
+        self.supervisor.authenticated = True
+        self.supervisor.auth_info_payload = {
+            "email": "private@example.invalid",
+            "profileImageUrl": "https://private.invalid/image",
+            "token": "private-token",
+        }
+        account = self.adapter.account()
+        self.assertTrue(account.authenticated)
+        rendered = repr(account)
+        for value in self.supervisor.auth_info_payload.values():
+            self.assertNotIn(value, rendered)
+        self.adapter.logout()
+        self.assertEqual(1, self.supervisor.logout_calls)
+        self.assertFalse(self.adapter.account().authenticated)
+
+
+class GrokModelsAndSessionTest(unittest.TestCase):
+    def setUp(self):
+        self.supervisor = FakeGrokSupervisor()
+        self.supervisor.authenticated = True
+        self.adapter = GrokAgentAdapter("/workspace", self.supervisor)
+        self.adapter.activate()
+
+    def test_zero_one_many_duplicate_removal_and_malformed_catalog(self):
+        self.supervisor.model_response = model_state([], None)
+        self.assertEqual((), self.adapter.models())
+        self.supervisor.model_response = model_state(
+            [{"modelId": "one", "name": "One"}], "one"
+        )
+        self.assertEqual(["one"], [item.model_id for item in self.adapter.models()])
+        self.supervisor.model_response = model_state(
+            [
+                {"modelId": "one", "name": "One"},
+                {"modelId": "one", "name": "Duplicate"},
+                {"modelId": "two", "name": "Two"},
+            ],
+            "two",
+        )
+        values = self.adapter.models()
+        self.assertEqual(["one", "two"], [item.model_id for item in values])
+        self.assertEqual([False, True], [item.is_default for item in values])
+        self.supervisor.model_response = model_state(
+            [{"modelId": "two", "name": "Two"}], "two"
+        )
+        self.assertEqual(["two"], [item.model_id for item in self.adapter.models()])
+
+        for malformed in (
+            {},
+            {"result": "bad"},
+            {"result": {"availableModels": "bad", "currentModelId": None}},
+            model_state([{"modelId": "", "name": "Bad"}], ""),
+        ):
+            self.supervisor.model_response = malformed
+            with self.assertRaises(GrokAdapterError):
+                self.adapter.models()
+
+    def test_new_resume_model_change_stream_and_close_lifecycle(self):
+        handle = self.adapter.start_turn(chat())
+        events = list(self.adapter.stream(handle))
+        self.assertEqual(["start", "done"], [event.event_type for event in events])
+        self.assertEqual([("/workspace", "model-alpha")], self.supervisor.new_session_calls)
+        self.assertEqual(1, len(self.supervisor.prompt_calls))
+
+        handle = self.adapter.start_turn(chat(model="model-beta", resume=True))
+        list(self.adapter.stream(handle))
+        self.assertEqual([("session-1", "/workspace")], self.supervisor.resume_session_calls)
+        self.assertEqual([("session-1", "model-beta")], self.supervisor.set_model_calls)
+        bindings = self.adapter.conversation_bindings()
+        self.assertEqual(AgentId.GROK, bindings[0].agent_id)
+        self.assertEqual("model-beta", bindings[0].model_id)
+        self.assertEqual(self.supervisor.generation, bindings[0].process_generation)
+
+        self.adapter.logout()
+        self.assertEqual(["session-1"], self.supervisor.close_session_calls)
+        self.assertEqual((), self.adapter.conversation_bindings())
+
+    def test_agent_or_generation_mismatch_rejects_before_resume_and_prompt(self):
+        wrong_agent = AgentConversationBinding(
+            agent_id=AgentId.CODEX,
+            conversation_id="conversation-one",
+            backend_session_id="session-old",
+            model_id="model-alpha",
+            process_generation=self.supervisor.generation,
+        )
+        with self.assertRaises(ValueError):
+            GrokAgentAdapter("/workspace", self.supervisor, (wrong_agent,))
+
+        stale = replace(wrong_agent, agent_id=AgentId.GROK, process_generation=6)
+        adapter = GrokAgentAdapter("/workspace", self.supervisor, (stale,))
+        adapter.activate()
+        with self.assertRaises(GrokAdapterError) as error:
+            adapter.start_turn(chat(resume=True))
+        self.assertEqual("conversation_generation_mismatch", error.exception.code)
+        self.assertEqual([], self.supervisor.resume_session_calls)
+        self.assertEqual([], self.supervisor.prompt_calls)
+
+    def test_stop_is_idempotent_for_one_active_session(self):
+        release = threading.Event()
+
+        def blocking_prompt(session_id, text):
+            self.supervisor.prompt_calls.append((session_id, text))
+            release.wait(1.0)
+            return {"stopReason": "cancelled"}
+
+        self.supervisor.prompt = blocking_prompt
+        handle = self.adapter.start_turn(chat())
+        self.adapter.interrupt(handle.request_id)
+        self.adapter.interrupt(handle.request_id)
+        self.assertEqual(["session-1"], self.supervisor.cancel_session_calls)
+        release.set()
+        events = list(self.adapter.stream(handle))
+        self.assertEqual("turn_interrupted", events[-1].code)
+
+
+if __name__ == "__main__":
+    unittest.main()
