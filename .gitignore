@@ -17,6 +17,7 @@ local.properties
 
 # Generated or device-private runtime material
 /codex-cli-pack/build/generated/
+/grok-cli-pack/build/generated/
 /runtime/
 /alpine-rootfs/
 /codex-home/

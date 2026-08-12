@@ -64,9 +64,11 @@ def parse_args() -> argparse.Namespace:
 def generate(project_root: Path, output: Path) -> None:
     catalog_path = project_root / "gradle/libs.versions.toml"
     lock_path = project_root / "codex-cli-pack/codex-cli.lock.json"
+    grok_lock_path = project_root / "grok-cli-pack/grok-cli.lock.json"
     runtime_sbom_path = project_root / "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json"
     versions, libraries = read_catalog(catalog_path)
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    grok_lock = json.loads(grok_lock_path.read_text(encoding="utf-8"))
 
     components: list[dict[str, str]] = [
         {
@@ -83,6 +85,14 @@ def generate(project_root: Path, output: Path) -> None:
             "version": "3.21.3",
             "license": "SPDX-2.3; see bundled runtime SBOM",
             "source": "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json",
+            "scope": "generated-debug-asset",
+        },
+        {
+            "kind": "official-cli",
+            "name": "Grok CLI",
+            "version": grok_lock["version"],
+            "license": "Apache-2.0; see docs/grok-cli-notice.md",
+            "source": grok_lock["source_url"],
             "scope": "generated-debug-asset",
         },
         {

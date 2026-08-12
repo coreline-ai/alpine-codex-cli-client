@@ -66,6 +66,7 @@ val generateDebugComponentInventory by tasks.registering(Exec::class) {
     description = "Generates the debug-only component, license, and SBOM inventory asset."
     inputs.file(rootProject.layout.projectDirectory.file("gradle/libs.versions.toml"))
     inputs.file(rootProject.layout.projectDirectory.file("codex-cli-pack/codex-cli.lock.json"))
+    inputs.file(rootProject.layout.projectDirectory.file("grok-cli-pack/grok-cli.lock.json"))
     inputs.file(rootProject.layout.projectDirectory.file(
         "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json",
     ))
@@ -97,6 +98,7 @@ dependencies {
     implementation(project(":alpine-workspace-api"))
     implementation(project(":alpine-workspace-android"))
     implementation(project(":codex-cli-pack"))
+    implementation(project(":grok-cli-pack"))
     implementation(project(":codex-gateway-pack-bundled"))
     implementation(project(":codex-runtime-bridge"))
 

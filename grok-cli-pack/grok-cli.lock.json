@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "target": "linux-aarch64-static",
+  "source_url": "https://x.ai/cli/grok-1.0.0-linux-aarch64",
+  "artifact_name": "grok-1.0.0-linux-aarch64",
+  "binary_name": "grok",
+  "binary_size": 133745832,
+  "binary_sha256": "bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f",
+  "version_output": "grok 1.0.0 (3cd0d0cbce)",
+  "source_repository": "https://github.com/xai-org/grok-build",
+  "source_repository_commit": "be713136d2a69080743a3f6b3c72077057e5948f",
+  "source_revision": "5d08d7e4123092567ccd584cd9f99afa2972065c",
+  "license": "Apache-2.0"
+}

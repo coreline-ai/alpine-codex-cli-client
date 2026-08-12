@@ -65,11 +65,13 @@ No Grok source file or binary is copied or tracked in this Phase 0 entry. It rec
 
 | Item | Official source | Locked identity | Project state |
 |---|---|---|---|
-| Grok source snapshot | `https://github.com/xai-org/grok-build` | repository HEAD `be713136d2a69080743a3f6b3c72077057e5948f`; embedded source revision `5d08d7e4123092567ccd584cd9f99afa2972065c` | reviewed only; no source copied |
-| Grok Linux AArch64 artifact | `https://x.ai/cli/grok-1.0.0-linux-aarch64` | version `1.0.0`; size `133745832`; SHA-256 `bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f` | preflight only; binary not tracked |
+| Grok source snapshot | `https://github.com/xai-org/grok-build` | repository HEAD `be713136d2a69080743a3f6b3c72077057e5948f`; embedded source revision `5d08d7e4123092567ccd584cd9f99afa2972065c`; `LICENSE` SHA-256 `116f7778b9802e569b7fa3a532b17bd80eb13c67837def01eed093d4ea472f28`; `THIRD-PARTY-NOTICES` SHA-256 `7b7c315403c596f9b7a13bb562553ee4fd4c05da8672f95bcaa02a125eea2947` | reviewed; no source copied; notice links pinned to commit |
+| Grok Linux AArch64 artifact | `https://x.ai/cli/grok-1.0.0-linux-aarch64` | version `1.0.0`; size `133745832`; SHA-256 `bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f`; observed version `grok 1.0.0 (3cd0d0cbce)` | lock tracked; binary generated into debug asset only and not tracked |
 | Official installer | `https://x.ai/cli/install.sh` | Linux AArch64 selection and version smoke reviewed; no signed checksum validation observed | not copied or executed by the Android app |
 
-The upstream checksum is not a published signature. Phase 2 must fail closed on the project lock and document every future upgrade as a separate review.
+The upstream checksum is not a published signature. Phase 2 now fails closed on the project lock,
+static AArch64 ELF validation, app-private staging revalidation, APK hash audit, and Git exclusion.
+Every future upgrade remains a separate source/artifact review.
 
 ## Verification
 

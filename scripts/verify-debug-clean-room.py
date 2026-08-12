@@ -18,6 +18,7 @@ SOURCE_ROOTS = (
     "codex-runtime-bridge/src/main",
     "codex_gateway",
     "codex-cli-pack",
+    "grok-cli-pack",
     "codex-gateway-pack-bundled",
 )
 TEXT_SUFFIXES = {".kt", ".kts", ".java", ".py", ".xml", ".json"}
@@ -104,38 +105,52 @@ def check_tracked_files(project_root: Path) -> None:
             fail("tracked-generated-or-sensitive-artifact", Path(relative))
         if "codex-cli" in normalized and normalized.endswith("/codex"):
             fail("tracked-codex-cli-binary", Path(relative))
+        if "grok-cli" in normalized and normalized.endswith("/grok"):
+            fail("tracked-grok-cli-binary", Path(relative))
 
 
-def read_locked_cli(project_root: Path) -> tuple[int, str]:
-    try:
-        lock = json.loads((project_root / "codex-cli-pack/codex-cli.lock.json").read_text(encoding="utf-8"))
-        binary_size = lock["binary_size"]
-        binary_sha256 = lock["binary_sha256"]
-    except (KeyError, OSError, json.JSONDecodeError) as error:
-        raise SystemExit("debug CLI lock is unavailable for APK scan") from error
-    if not isinstance(binary_size, int) or binary_size <= 0 or not re.fullmatch(r"[0-9a-f]{64}", binary_sha256):
-        raise SystemExit("debug CLI lock is invalid for APK scan")
-    return binary_size, binary_sha256
+def read_locked_clis(project_root: Path) -> dict[str, tuple[int, str]]:
+    values: dict[str, tuple[int, str]] = {}
+    for asset_path, lock_relative in (
+        ("assets/codex-cli/codex", "codex-cli-pack/codex-cli.lock.json"),
+        ("assets/grok-cli/grok", "grok-cli-pack/grok-cli.lock.json"),
+    ):
+        try:
+            lock = json.loads((project_root / lock_relative).read_text(encoding="utf-8"))
+            binary_size = lock["binary_size"]
+            binary_sha256 = lock["binary_sha256"]
+        except (KeyError, OSError, json.JSONDecodeError) as error:
+            raise SystemExit("debug CLI lock is unavailable for APK scan") from error
+        if (
+            not isinstance(binary_size, int)
+            or binary_size <= 0
+            or not isinstance(binary_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", binary_sha256)
+        ):
+            raise SystemExit("debug CLI lock is invalid for APK scan")
+        values[asset_path] = (binary_size, binary_sha256)
+    return values
 
 
 def check_apk(project_root: Path, apk_path: Path) -> None:
     if not apk_path.is_file():
         raise SystemExit("debug APK is unavailable for clean-room scan")
     found_inventory = False
-    found_locked_cli = False
-    locked_cli_size, locked_cli_sha256 = read_locked_cli(project_root)
+    locked_clis = read_locked_clis(project_root)
+    found_locked_clis: set[str] = set()
     with zipfile.ZipFile(apk_path) as archive:
         for entry in archive.infolist():
             if entry.filename == "assets/META-INF/alpine-codex/debug-component-inventory.json":
                 found_inventory = True
-            if entry.filename == "assets/codex-cli/codex":
+            if entry.filename in locked_clis:
+                locked_cli_size, locked_cli_sha256 = locked_clis[entry.filename]
                 digest = hashlib.sha256()
                 with archive.open(entry) as source:
                     while block := source.read(64 * 1024):
                         digest.update(block)
                 if entry.file_size != locked_cli_size or digest.hexdigest() != locked_cli_sha256:
                     fail("unlocked-cli-binary-in-apk", Path(entry.filename))
-                found_locked_cli = True
+                found_locked_clis.add(entry.filename)
                 continue
             tail = b""
             with archive.open(entry) as source:
@@ -149,7 +164,7 @@ def check_apk(project_root: Path, apk_path: Path) -> None:
                     tail = lowered[-64:]
     if not found_inventory:
         raise SystemExit("debug component inventory asset is missing from APK")
-    if not found_locked_cli:
+    if found_locked_clis != set(locked_clis):
         raise SystemExit("locked CLI asset is missing from APK")
 
 
