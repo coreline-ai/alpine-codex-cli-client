@@ -104,6 +104,7 @@ class AgentGatewayHttpTest(unittest.TestCase):
             ("POST", "/internal/agents/select", {"agent_id": "grok"}),
             ("POST", "/internal/agents/grok/login/device", None),
             ("POST", "/internal/agents/grok/login/request-fixture/cancel", None),
+            ("POST", "/internal/agents/grok/login/active/cancel", None),
             ("POST", "/internal/agents/grok/logout", None),
             ("POST", "/v1/chat/completions", chat()),
             ("POST", "/internal/agents/grok/turn/request-fixture/interrupt", None),
@@ -112,7 +113,7 @@ class AgentGatewayHttpTest(unittest.TestCase):
             self.assertEqual(401, status)
             self.assertEqual("gateway_unauthorized", value["error"]["code"])
         self.assertEqual([], self.harness.supervisor.authenticate_calls)
-        self.assertEqual(11, len(self.harness.authorization_calls))
+        self.assertEqual(12, len(self.harness.authorization_calls))
 
     def test_fake_device_login_model_session_stream_and_logout_lifecycle(self):
         status, agents = self.harness.request("GET", "/v1/agents")
@@ -210,6 +211,18 @@ class AgentGatewayHttpTest(unittest.TestCase):
         )
         self.assertEqual(200, status)
         self.assertEqual("cancelled", value["status"])
+        self.assertEqual([1], self.harness.supervisor.cancel_auth_calls)
+
+    def test_recovered_active_login_can_be_cancelled_without_android_storing_opaque_id(self):
+        self.harness.supervisor.authenticate_release.clear()
+        status, login = self.harness.request("POST", "/internal/agents/grok/login/device")
+        self.assertEqual(200, status)
+        status, cancelled = self.harness.request(
+            "POST", "/internal/agents/grok/login/active/cancel"
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertEqual(login["request_id"], cancelled["request_id"])
         self.assertEqual([1], self.harness.supervisor.cancel_auth_calls)
 
     def test_agent_query_and_binding_fail_closed_before_backend_call(self):

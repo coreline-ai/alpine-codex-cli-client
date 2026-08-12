@@ -24,6 +24,8 @@ import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactProvider
 import dev.alpine.codexclient.gatewaypack.StagedCodexGateway
 import dev.alpine.codexclient.bridge.CodexGatewayClient
 import dev.alpine.codexclient.bridge.CodexGatewayChatBackend
+import dev.alpine.codexclient.bridge.AgentGatewayClient
+import dev.alpine.codexclient.bridge.AgentGatewayChatBackend
 import dev.alpine.codexclient.bridge.CodexRuntimeController
 import dev.alpine.codexclient.bridge.GatewayArtifactStager
 import dev.alpine.codexclient.bridge.GatewayLaunchSpec
@@ -67,6 +69,10 @@ class AlpineCodexApplication : Application() {
     lateinit var codexGatewayClient: CodexGatewayClient
         private set
     lateinit var codexChatBackend: CodexGatewayChatBackend
+        private set
+    lateinit var agentGatewayClient: AgentGatewayClient
+        private set
+    lateinit var agentChatBackend: AgentGatewayChatBackend
         private set
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
@@ -146,6 +152,8 @@ class AlpineCodexApplication : Application() {
         codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
         codexGatewayClient = CodexGatewayClient()
         codexChatBackend = CodexGatewayChatBackend(codexGatewayClient)
+        agentGatewayClient = AgentGatewayClient()
+        agentChatBackend = AgentGatewayChatBackend(agentGatewayClient)
         codexRuntimeController = CodexRuntimeController(
             runtimeHost = AndroidGatewayRuntimeHost(runtimeManager, runtimeController),
             stager = GatewayArtifactStager(::stageGatewayLaunch),
@@ -197,6 +205,8 @@ class AlpineCodexApplication : Application() {
 
     private fun stageGatewayLaunch(): GatewayLaunchSpec {
         val cli = stageCodexCli()
+        stageGrokCli()
+        stageGrokProfile()
         stageCodexGateway()
         return GatewayLaunchSpec(
             codexExecutable = cli.guestExecutablePath,

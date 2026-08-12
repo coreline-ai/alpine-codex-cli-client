@@ -28,6 +28,8 @@ class AgentContractsTest {
         assertEquals(AgentId.GROK, AgentStorageSchema.resolveAgentId(2, "grok"))
         assertNull(AgentStorageSchema.resolveAgentId(2, null))
         assertNull(AgentStorageSchema.resolveAgentId(2, "future-agent"))
-        assertNull(AgentStorageSchema.parseVersion(3))
+        assertEquals(3, AgentStorageSchema.parseVersion(3))
+        assertEquals(AgentId.GROK, AgentStorageSchema.resolveAgentId(3, "grok"))
+        assertNull(AgentStorageSchema.parseVersion(4))
     }
 }

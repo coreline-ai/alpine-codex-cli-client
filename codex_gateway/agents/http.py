@@ -84,6 +84,9 @@ def make_agent_handler(
                 elif len(parts) == 4 and parts[:2] == ["internal", "agents"] and parts[3] == "logout":
                     self._require_empty(body)
                     self._json(200, service.logout(parts[2]))
+                elif len(parts) == 6 and parts[:2] == ["internal", "agents"] and parts[3:] == ["login", "active", "cancel"]:
+                    self._require_empty(body)
+                    self._json(200, service.cancel_active_login(parts[2]))
                 elif len(parts) == 6 and parts[:2] == ["internal", "agents"] and parts[3] == "login" and parts[5:] == ["cancel"]:
                     self._require_empty(body)
                     self._json(200, service.cancel_login(parts[2], parts[4]))

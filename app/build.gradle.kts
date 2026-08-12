@@ -15,7 +15,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        manifestPlaceholders["appLabel"] = "Alpine Codex Client"
+        manifestPlaceholders["appLabel"] = "Alpine Agent Client"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -23,7 +23,7 @@ android {
         getByName("debug") {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            manifestPlaceholders["appLabel"] = "Alpine Codex Client (Debug)"
+            manifestPlaceholders["appLabel"] = "Alpine Agent Client (Debug)"
         }
     }
 

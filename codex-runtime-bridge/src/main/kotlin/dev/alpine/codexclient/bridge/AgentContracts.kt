@@ -13,18 +13,19 @@ enum class AgentId(val wireValue: String) {
 
 /** Version rules for migrating the existing Codex-only encrypted conversation state. */
 object AgentStorageSchema {
-    const val CURRENT_VERSION = 2
+    const val CURRENT_VERSION = 3
     private const val CODEX_ONLY_VERSION = 1
+    private const val AGENT_TAGGED_VERSION = 2
 
     fun parseVersion(value: Int?): Int? = when (value) {
         null -> CODEX_ONLY_VERSION
-        CODEX_ONLY_VERSION, CURRENT_VERSION -> value
+        CODEX_ONLY_VERSION, AGENT_TAGGED_VERSION, CURRENT_VERSION -> value
         else -> null
     }
 
     fun resolveAgentId(schemaVersion: Int, storedValue: String?): AgentId? = when (schemaVersion) {
         CODEX_ONLY_VERSION -> if (storedValue.isNullOrEmpty()) AgentId.CODEX else AgentId.fromWire(storedValue)
-        CURRENT_VERSION -> AgentId.fromWire(storedValue)
+        AGENT_TAGGED_VERSION, CURRENT_VERSION -> AgentId.fromWire(storedValue)
         else -> null
     }
 }

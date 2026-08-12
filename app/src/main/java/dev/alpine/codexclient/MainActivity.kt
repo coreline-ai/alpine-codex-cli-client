@@ -55,11 +55,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private val runtimeViewModel: RuntimeViewModel by viewModels()
-    private val chatViewModel: CodexChatViewModel by viewModels()
+    private val chatViewModel: AgentChatViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AlpineCodexClientApp(runtimeViewModel, chatViewModel) }
+        setContent { AlpineAgentClientApp(runtimeViewModel, chatViewModel) }
     }
 }
 
@@ -349,7 +349,7 @@ fun Composer(
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun RuntimeStatusSheet(
+internal fun RuntimeStatusSheet(
     runtimeState: RuntimeUiState,
     generationActive: Boolean,
     onDismiss: () -> Unit,

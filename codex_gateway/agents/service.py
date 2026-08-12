@@ -130,6 +130,14 @@ class AgentGatewayService:
         self._finish_login_once(adapter.agent_id, login.request_id)
         return self._login_status_value(login)
 
+    def cancel_active_login(self, agent_id: object) -> Dict[str, Any]:
+        adapter = self._adapter(agent_id)
+        state = self._router.state()
+        active = state.active_login
+        if active is None or active.agent_id is not adapter.agent_id:
+            raise AgentServiceError(404, "agent_login_not_found")
+        return self.cancel_login(adapter.agent_id, active.request_id)
+
     def logout(self, agent_id: object) -> Dict[str, Any]:
         adapter = self._adapter(agent_id)
         state = self._router.state()

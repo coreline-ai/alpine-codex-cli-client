@@ -28,6 +28,11 @@ internal data class StoredConversation(
 internal data class StoredConversationState(
     val activeConversationId: String?,
     val conversations: List<StoredConversation>,
+    val selectedAgentId: AgentId = AgentId.CODEX,
+    val activeConversationIds: Map<AgentId, String> = activeConversationId
+        ?.let { mapOf(AgentId.CODEX to it) }
+        .orEmpty(),
+    val selectedModelIds: Map<AgentId, String> = emptyMap(),
 )
 
 /**
@@ -110,8 +115,17 @@ internal class EncryptedConversationStore(context: Context) {
         }
         return JSONObject()
             .put("schema_version", AgentStorageSchema.CURRENT_VERSION)
-            .put("active_conversation_id", value.activeConversationId)
+            .put("selected_agent_id", value.selectedAgentId.wireValue)
+            .put("active_conversation_ids", encodeAgentMap(value.activeConversationIds, MAX_CONVERSATION_ID_LENGTH))
+            .put("selected_model_ids", encodeAgentMap(value.selectedModelIds, MAX_MODEL_ID_LENGTH))
             .put("conversations", conversations)
+    }
+
+    private fun encodeAgentMap(values: Map<AgentId, String>, maxLength: Int): JSONObject = JSONObject().also { output ->
+        values.forEach { (agentId, storedValue) ->
+            require(storedValue.isNotBlank() && storedValue.length <= maxLength)
+            output.put(agentId.wireValue, storedValue)
+        }
     }
 
     private fun encodeConversation(value: StoredConversation): JSONObject {
@@ -140,13 +154,68 @@ internal class EncryptedConversationStore(context: Context) {
                 rawConversations.optJSONObject(index) ?: return null,
                 schemaVersion,
             ) ?: return null
-            if (conversations.none { it.conversationId == conversation.conversationId }) {
+            if (conversations.none {
+                    it.agentId == conversation.agentId && it.conversationId == conversation.conversationId
+                }
+            ) {
                 conversations += conversation
             }
         }
-        val activeConversationId = value.optString("active_conversation_id", "")
-            .takeIf { activeId -> conversations.any { it.conversationId == activeId } }
-        return StoredConversationState(activeConversationId, conversations)
+        if (schemaVersion < AgentStorageSchema.CURRENT_VERSION) {
+            val activeConversationId = value.optString("active_conversation_id", "")
+                .takeIf { activeId -> conversations.any { it.conversationId == activeId } }
+            val selectedAgent = conversations.firstOrNull { it.conversationId == activeConversationId }
+                ?.agentId
+                ?: AgentId.CODEX
+            val activeIds = activeConversationId?.let { mapOf(selectedAgent to it) }.orEmpty()
+            val selectedModels = conversations
+                .filter { it.selectedModelId != null }
+                .associate { it.agentId to checkNotNull(it.selectedModelId) }
+            return StoredConversationState(
+                activeConversationId = activeConversationId,
+                conversations = conversations,
+                selectedAgentId = selectedAgent,
+                activeConversationIds = activeIds,
+                selectedModelIds = selectedModels,
+            )
+        }
+        val selectedAgent = AgentId.fromWire(value.optString("selected_agent_id", "")) ?: return null
+        val activeIds = parseAgentMap(
+            value.optJSONObject("active_conversation_ids") ?: return null,
+            MAX_CONVERSATION_ID_LENGTH,
+        )
+            ?: return null
+        if (activeIds.any { (agentId, activeId) ->
+                conversations.none { it.agentId == agentId && it.conversationId == activeId }
+            }
+        ) return null
+        val selectedModels = parseAgentMap(
+            value.optJSONObject("selected_model_ids") ?: return null,
+            MAX_MODEL_ID_LENGTH,
+        )
+            ?: return null
+        return StoredConversationState(
+            activeConversationId = activeIds[selectedAgent],
+            conversations = conversations,
+            selectedAgentId = selectedAgent,
+            activeConversationIds = activeIds,
+            selectedModelIds = selectedModels,
+        )
+    }
+
+    private fun parseAgentMap(value: JSONObject, maxLength: Int): Map<AgentId, String>? {
+        if (value.length() > AgentId.entries.size) return null
+        val parsed = linkedMapOf<AgentId, String>()
+        val keys = value.keys()
+        while (keys.hasNext()) {
+            val rawAgent = keys.next()
+            val agentId = AgentId.fromWire(rawAgent) ?: return null
+            val storedValue = value.optString(rawAgent, "")
+                .takeIf { it.isNotEmpty() && it.length <= maxLength }
+                ?: return null
+            parsed[agentId] = storedValue
+        }
+        return parsed
     }
 
     private fun parseConversation(value: JSONObject, schemaVersion: Int): StoredConversation? {
@@ -181,8 +250,9 @@ internal class EncryptedConversationStore(context: Context) {
         const val IV_BYTES = 12
         const val MAX_FILE_BYTES = 256 * 1024L
         const val MAX_PLAINTEXT_BYTES = 192 * 1024
-        const val MAX_CONVERSATIONS = 4
+        const val MAX_CONVERSATIONS = 8
         const val MAX_CONVERSATION_ID_LENGTH = 128
+        const val MAX_MODEL_ID_LENGTH = 256
         const val MAX_MESSAGES = 8
         const val MAX_MESSAGE_BYTES = 4 * 1024
     }
