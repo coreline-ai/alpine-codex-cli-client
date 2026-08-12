@@ -13,7 +13,7 @@ from codex_gateway.agents.grok import (
     GrokRetryPolicy,
 )
 from codex_gateway.grok_acp.process import GrokSupervisorState
-from codex_gateway.grok_acp.rpc import AcpNotification
+from codex_gateway.grok_acp.rpc import AcpNotification, GrokProfileAudit
 
 
 def model_state(rows=None, current="model-alpha"):
@@ -77,6 +77,7 @@ class FakeGrokSupervisor:
         self.close_session_calls = []
         self.logout_calls = 0
         self.notification_sequence = 0
+        self.profile_audit_value = GrokProfileAudit()
 
     def start(self):
         self.state = GrokSupervisorState.READY
@@ -155,6 +156,14 @@ class FakeGrokSupervisor:
     def prompt(self, session_id, text):
         self.prompt_calls.append((session_id, text))
         return {"stopReason": "end_turn"}
+
+    @property
+    def profile_audit(self):
+        return self.profile_audit_value
+
+    @property
+    def prompt_dispatch_count(self):
+        return len(self.prompt_calls)
 
     def cancel_session(self, session_id):
         self.cancel_session_calls.append(session_id)
@@ -512,6 +521,44 @@ class GrokStreamPolicyTest(unittest.TestCase):
         self.assertEqual(1, metrics.retry_attempts)
         self.assertEqual(3, metrics.retry_max)
         self.assertNotIn(private_reason, repr(metrics))
+
+    def test_terminal_event_exposes_only_redacted_turn_and_profile_counts(self):
+        handle, release = self.blocking_turn()
+        self.supervisor.emit("session/update", agent_chunk("secret-output-fragment"))
+        release.set()
+        events = list(self.adapter.stream(handle))
+        diagnostics = events[-1].diagnostics
+        self.assertIsNotNone(diagnostics)
+        self.assertEqual(1, diagnostics.prompt_dispatch_count)
+        self.assertEqual(1, diagnostics.visible_delta_count)
+        self.assertEqual(1, diagnostics.terminal_count)
+        self.assertEqual(0, diagnostics.cancel_dispatch_count)
+        self.assertEqual("none", diagnostics.retry_classification)
+        self.assertEqual(
+            (0, 0, 0, 0, 0),
+            (
+                diagnostics.tool_event_count,
+                diagnostics.subagent_event_count,
+                diagnostics.mcp_event_count,
+                diagnostics.filesystem_event_count,
+                diagnostics.terminal_event_count,
+            ),
+        )
+        rendered = repr(diagnostics)
+        for forbidden in (
+            "session-1",
+            "conversation-one",
+            "fixture prompt",
+            "secret-output-fragment",
+        ):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_dirty_profile_stops_before_prompt_dispatch(self):
+        self.supervisor.profile_audit_value = GrokProfileAudit(tool_event_count=1)
+        with self.assertRaises(GrokAdapterError) as error:
+            self.adapter.start_turn(chat())
+        self.assertEqual("grok_chat_profile_violation", error.exception.code)
+        self.assertEqual([], self.supervisor.prompt_calls)
 
     def test_post_output_retry_auth_failure_exhaustion_and_strict_policy_fail_stably(self):
         cases = (

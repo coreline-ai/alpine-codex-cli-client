@@ -69,6 +69,22 @@ data class AgentConversationBinding(
     val processGeneration: Long,
 )
 
+/** Content-free evidence emitted only with a Grok terminal stream event. */
+data class AgentTurnDiagnostics(
+    val promptDispatchCount: Int,
+    val visibleDeltaCount: Int,
+    val terminalCount: Int,
+    val cancelDispatchCount: Int,
+    val retryClassification: String,
+    val retryAttempts: Int,
+    val retryMax: Int,
+    val toolEventCount: Int,
+    val subagentEventCount: Int,
+    val mcpEventCount: Int,
+    val filesystemEventCount: Int,
+    val terminalEventCount: Int,
+)
+
 sealed interface AgentTurnEvent {
     val agentId: AgentId
     val requestId: String
@@ -88,11 +104,13 @@ sealed interface AgentTurnEvent {
     data class Completed(
         override val agentId: AgentId,
         override val requestId: String,
+        val diagnostics: AgentTurnDiagnostics? = null,
     ) : AgentTurnEvent
 
     data class Failed(
         override val agentId: AgentId,
         override val requestId: String,
         val code: String,
+        val diagnostics: AgentTurnDiagnostics? = null,
     ) : AgentTurnEvent
 }

@@ -174,6 +174,61 @@ class GrokMultiplexerTest(unittest.TestCase):
         self.assertEqual(1, len(notifications))
         self.assertEqual("x.ai/session_notification", notifications[0].method)
 
+    def test_chat_profile_audit_blocks_forbidden_activity_before_prompt_write(self):
+        cases = (
+            (
+                "tool_event_count",
+                "session/update",
+                {"update": {"sessionUpdate": "tool_call", "toolCallId": "fixture"}},
+            ),
+            (
+                "subagent_event_count",
+                "_x.ai/session/update",
+                {"update": {"sessionUpdate": "subagent_spawned"}},
+            ),
+            ("mcp_event_count", "x.ai/mcp/tools_changed", {}),
+            ("filesystem_event_count", "x.ai/fs_notify", {}),
+            ("terminal_event_count", "x.ai/terminal/output", {}),
+            ("filesystem_event_count", "fs/read_text_file", {}),
+            ("terminal_event_count", "terminal/create", {}),
+        )
+        for field, method, params in cases:
+            with self.subTest(field=field):
+                writes = []
+                rpc = _AcpMultiplexer(writes.append, generation=11)
+                with self.assertRaises(AcpProtocolError) as error:
+                    rpc.handle_object(
+                        {"jsonrpc": "2.0", "method": method, "params": params},
+                        generation=11,
+                    )
+                self.assertEqual("grok_chat_profile_violation", error.exception.code)
+                self.assertEqual(1, getattr(rpc.profile_audit, field))
+                with self.assertRaises(AcpProtocolError):
+                    rpc.request(
+                        _RequestMethod.SESSION_PROMPT,
+                        {"sessionId": "fixture", "prompt": []},
+                        0.01,
+                        require_clean_profile=True,
+                    )
+                self.assertEqual([], writes)
+
+        clean_writes = []
+        clean = _AcpMultiplexer(clean_writes.append, generation=12)
+        clean.handle_object(
+            {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "available_commands_update",
+                        "availableCommands": ["model"],
+                    }
+                },
+            },
+            generation=12,
+        )
+        self.assertTrue(clean.profile_audit.clean)
+
 
 class GrokSupervisorTest(unittest.TestCase):
     def tearDown(self):

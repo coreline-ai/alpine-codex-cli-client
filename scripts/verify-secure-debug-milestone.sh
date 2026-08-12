@@ -38,7 +38,8 @@ python3 scripts/verify-grok-acp-contract.py --project-root "$project_root"
 sh scripts/verify-secure-debug-apk.sh "$lab_apk" "$secure_apk"
 python3 scripts/verify-sensitive-evidence.py \
   docs/samsung-debug-e2e-evidence.md \
-  docs/grok-phase8-security-evidence.md
+  docs/grok-phase8-security-evidence.md \
+  docs/samsung-grok-secure-debug-e2e.md
 sh scripts/verify-reference-source-map.sh "$reference_repo"
 sh scripts/verify-runtime-reference-manifest.sh "$reference_repo"
 git diff --check

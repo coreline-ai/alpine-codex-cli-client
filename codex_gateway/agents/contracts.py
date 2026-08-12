@@ -78,6 +78,24 @@ class AgentConversationBinding:
 
 
 @dataclass(frozen=True)
+class AgentTurnDiagnostics:
+    """Content-free terminal counters suitable for authenticated redacted evidence."""
+
+    prompt_dispatch_count: int
+    visible_delta_count: int
+    terminal_count: int
+    cancel_dispatch_count: int
+    retry_classification: str
+    retry_attempts: int
+    retry_max: int
+    tool_event_count: int
+    subagent_event_count: int
+    mcp_event_count: int
+    filesystem_event_count: int
+    terminal_event_count: int
+
+
+@dataclass(frozen=True)
 class AgentTurnEvent:
     agent_id: AgentId
     request_id: str
@@ -85,6 +103,7 @@ class AgentTurnEvent:
     text: str = ""
     code: Optional[str] = None
     conversation_id: Optional[str] = None
+    diagnostics: Optional[AgentTurnDiagnostics] = None
 
 
 @dataclass(frozen=True)

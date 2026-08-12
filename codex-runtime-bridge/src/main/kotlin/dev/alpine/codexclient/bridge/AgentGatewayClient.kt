@@ -401,12 +401,53 @@ open class AgentGatewayClient(
         val id = item.requiredString("id")
         val agentId = matchingAgent(item, expectedAgent)
         return when (type) {
-            "start" -> AgentTurnEvent.Started(agentId, id, item.optionalString("conversation_id"))
-            "delta" -> AgentTurnEvent.Delta(agentId, id, item.requiredString("text").takeIf { it.isNotEmpty() } ?: malformed())
-            "done" -> AgentTurnEvent.Completed(agentId, id)
-            "error" -> AgentTurnEvent.Failed(agentId, id, item.requiredString("code"))
+            "start" -> {
+                if (item.containsKey("diagnostics")) malformed()
+                AgentTurnEvent.Started(agentId, id, item.optionalString("conversation_id"))
+            }
+            "delta" -> {
+                if (item.containsKey("diagnostics")) malformed()
+                AgentTurnEvent.Delta(agentId, id, item.requiredString("text").takeIf { it.isNotEmpty() } ?: malformed())
+            }
+            "done" -> AgentTurnEvent.Completed(agentId, id, parseTurnDiagnostics(item, agentId))
+            "error" -> AgentTurnEvent.Failed(
+                agentId,
+                id,
+                item.requiredString("code"),
+                parseTurnDiagnostics(item, agentId),
+            )
             else -> malformed()
         }
+    }
+
+    private fun parseTurnDiagnostics(
+        event: Map<String, JsonValue>,
+        agentId: AgentId,
+    ): AgentTurnDiagnostics? {
+        val raw = event["diagnostics"] ?: return null
+        if (agentId != AgentId.GROK) malformed()
+        val value = raw.asObject()
+        if (value.keys != TURN_DIAGNOSTIC_FIELDS) malformed()
+        val result = AgentTurnDiagnostics(
+            promptDispatchCount = value.requiredBoundedCount("prompt_dispatch_count", 1),
+            visibleDeltaCount = value.requiredBoundedCount("visible_delta_count", MAX_STREAM_EVENTS),
+            terminalCount = value.requiredBoundedCount("terminal_count", 1),
+            cancelDispatchCount = value.requiredBoundedCount("cancel_dispatch_count", 1),
+            retryClassification = value.requiredString("retry_classification"),
+            retryAttempts = value.requiredBoundedCount("retry_attempts", MAX_RETRY_ATTEMPTS),
+            retryMax = value.requiredBoundedCount("retry_max", MAX_RETRY_ATTEMPTS),
+            toolEventCount = value.requiredBoundedCount("tool_event_count", MAX_PROFILE_EVENTS),
+            subagentEventCount = value.requiredBoundedCount("subagent_event_count", MAX_PROFILE_EVENTS),
+            mcpEventCount = value.requiredBoundedCount("mcp_event_count", MAX_PROFILE_EVENTS),
+            filesystemEventCount = value.requiredBoundedCount("filesystem_event_count", MAX_PROFILE_EVENTS),
+            terminalEventCount = value.requiredBoundedCount("terminal_event_count", MAX_PROFILE_EVENTS),
+        )
+        if (
+            result.terminalCount != 1 ||
+            result.retryClassification !in RETRY_CLASSIFICATIONS ||
+            result.retryAttempts > result.retryMax && result.retryMax != 0
+        ) malformed()
+        return result
     }
 
     private fun parseSseEvent(lines: List<ByteArray>): ByteArray? {
@@ -482,6 +523,12 @@ open class AgentGatewayClient(
             number.takeIf { it in 1..maximum } ?: malformed()
         }
 
+    private fun Map<String, JsonValue>.requiredBoundedCount(field: String, maximum: Int): Int =
+        get(field)?.let { value ->
+            val number = (value as? JsonValue.NumberValue)?.value?.toIntOrNull() ?: malformed()
+            number.takeIf { it in 0..maximum } ?: malformed()
+        } ?: malformed()
+
     private fun malformed(): Nothing = failure(GatewayClientErrorCode.MALFORMED_RESPONSE)
 
     private fun failure(code: GatewayClientErrorCode): Nothing = throw GatewayClientException(code)
@@ -498,6 +545,9 @@ open class AgentGatewayClient(
         const val MAX_LOGIN_POLL_SECONDS = 60
         const val MAX_TEXT_BYTES = 16 * 1024
         const val MAX_MODELS = 128
+        const val MAX_STREAM_EVENTS = 128
+        const val MAX_RETRY_ATTEMPTS = 32
+        const val MAX_PROFILE_EVENTS = 128
         val DATA_PREFIX = "data:".toByteArray(Charsets.US_ASCII)
         val COLON_PREFIX = ":".toByteArray(Charsets.US_ASCII)
         val DONE_MARKER = "[DONE]".toByteArray(Charsets.US_ASCII)
@@ -510,6 +560,29 @@ open class AgentGatewayClient(
         val ACTIVE_LOGIN_CANCEL_PATH = Regex("/internal/agents/(codex|grok)/login/active/cancel")
         val INTERRUPT_PATH = Regex("/internal/agents/(codex|grok)/turn/[A-Za-z0-9_-]+/interrupt")
         val LOGIN_STATES = setOf("pending", "authenticated", "completed", "failed", "cancelled", "expired")
+        val RETRY_CLASSIFICATIONS = setOf(
+            "none",
+            "pre_output",
+            "post_output",
+            "strict_blocked",
+            "exhausted",
+            "auth_failed",
+            "failed",
+        )
+        val TURN_DIAGNOSTIC_FIELDS = setOf(
+            "prompt_dispatch_count",
+            "visible_delta_count",
+            "terminal_count",
+            "cancel_dispatch_count",
+            "retry_classification",
+            "retry_attempts",
+            "retry_max",
+            "tool_event_count",
+            "subagent_event_count",
+            "mcp_event_count",
+            "filesystem_event_count",
+            "terminal_event_count",
+        )
     }
 }
 

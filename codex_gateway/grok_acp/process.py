@@ -29,6 +29,7 @@ from .rpc import (
     AcpProtocolError,
     AcpStopped,
     AcpTimeout,
+    GrokProfileAudit,
     _AcpMultiplexer,
 )
 
@@ -326,7 +327,16 @@ class GrokAcpSupervisor:
                 "sessionId": opaque_identifier(session_id),
                 "prompt": [{"type": "text", "text": text}],
             },
+            require_clean_profile=True,
         )
+
+    @property
+    def profile_audit(self) -> GrokProfileAudit:
+        return self._require_rpc().profile_audit
+
+    @property
+    def prompt_dispatch_count(self) -> int:
+        return self._require_rpc().prompt_dispatch_total
 
     def cancel_session(self, session_id: str) -> None:
         with self._lock:
@@ -387,7 +397,13 @@ class GrokAcpSupervisor:
             self._wait_thread = None
             self._state = GrokSupervisorState.STOPPED
 
-    def _typed_request(self, method: _RequestMethod, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _typed_request(
+        self,
+        method: _RequestMethod,
+        params: Dict[str, Any],
+        *,
+        require_clean_profile: bool = False,
+    ) -> Dict[str, Any]:
         with self._lock:
             if method is _RequestMethod.INITIALIZE:
                 permitted = self._state is GrokSupervisorState.INITIALIZING
@@ -397,7 +413,12 @@ class GrokAcpSupervisor:
                 raise GrokSupervisorError("grok_not_ready")
             generation = self._generation
         try:
-            return self._require_rpc().request(method, params, self._method_timeout(method))
+            return self._require_rpc().request(
+                method,
+                params,
+                self._method_timeout(method),
+                require_clean_profile=require_clean_profile,
+            )
         except (AcpTimeout, AcpProcessLost) as error:
             # A timed-out ID can still arrive later. Retire the whole generation so a late
             # response can never be confused with subsequent work and no request is replayed.

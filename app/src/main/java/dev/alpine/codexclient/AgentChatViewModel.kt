@@ -661,6 +661,7 @@ class AgentChatViewModel @JvmOverloads constructor(
                 })
             }
             is AgentTurnEvent.Completed -> {
+                AgentTurnAudit.record(event.agentId, "done", event.diagnostics)
                 _state.update {
                     it.copy(
                         connection = AgentConnectionState.READY,
@@ -672,6 +673,7 @@ class AgentChatViewModel @JvmOverloads constructor(
                 persistAgentState()
             }
             is AgentTurnEvent.Failed -> {
+                AgentTurnAudit.record(event.agentId, "error", event.diagnostics)
                 _state.update {
                     it.copy(
                         connection = AgentConnectionState.STABLE_ERROR,

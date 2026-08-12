@@ -51,6 +51,29 @@ class AcpNotification:
     params: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class GrokProfileAudit:
+    """Content-free counts of forbidden chat-profile activity in one process generation."""
+
+    tool_event_count: int = 0
+    subagent_event_count: int = 0
+    mcp_event_count: int = 0
+    filesystem_event_count: int = 0
+    terminal_event_count: int = 0
+
+    @property
+    def clean(self) -> bool:
+        return not any(
+            (
+                self.tool_event_count,
+                self.subagent_event_count,
+                self.mcp_event_count,
+                self.filesystem_event_count,
+                self.terminal_event_count,
+            )
+        )
+
+
 @dataclass
 class _Pending:
     event: threading.Event = field(default_factory=threading.Event)
@@ -87,22 +110,30 @@ class _AcpMultiplexer:
         self._terminal_error: Optional[AcpError] = None
         self._stale_generation_count = 0
         self._discarded_notification_count = 0
+        self._profile_audit = GrokProfileAudit()
+        self._prompt_dispatch_total = 0
 
     def request(
         self,
         method: _RequestMethod,
         params: Dict[str, Any],
         timeout_seconds: float,
+        *,
+        require_clean_profile: bool = False,
     ) -> Dict[str, Any]:
         if not isinstance(method, _RequestMethod) or not isinstance(params, dict):
             raise ValueError("Grok ACP method is not allowlisted")
         if method is _RequestMethod.SESSION_CANCEL:
             raise ValueError("session cancel is notification-only")
+        if require_clean_profile and method is not _RequestMethod.SESSION_PROMPT:
+            raise ValueError("chat profile gate is prompt-only")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         with self._lock:
             if self._terminal_error is not None:
                 raise self._terminal_error
+            if require_clean_profile and not self._profile_audit.clean:
+                raise AcpProtocolError("grok_chat_profile_violation")
             if len(self._pending) >= self._max_pending:
                 raise AcpPendingLimit()
             request_id = self._next_id
@@ -112,6 +143,8 @@ class _AcpMultiplexer:
             payload = _encode_request(request_id, method.value, params)
             try:
                 self._write_bytes(payload)
+                if method is _RequestMethod.SESSION_PROMPT:
+                    self._prompt_dispatch_total += 1
             except Exception as error:
                 self._pending.pop(request_id, None)
                 self._record_completed(request_id)
@@ -167,6 +200,7 @@ class _AcpMultiplexer:
             raise AcpProtocolError("grok_acp_version_invalid")
         if "id" in message:
             if "method" in message:
+                self._record_profile_event(message.get("method"), message.get("params"))
                 raise AcpProtocolError("grok_acp_reverse_request_forbidden")
             self._handle_response(message)
             return
@@ -174,6 +208,7 @@ class _AcpMultiplexer:
         params = message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             raise AcpProtocolError("grok_acp_message_shape_invalid")
+        self._record_profile_event(method, params)
         if method not in NOTIFICATION_METHODS:
             with self._lock:
                 self._discarded_notification_count += 1
@@ -223,6 +258,33 @@ class _AcpMultiplexer:
     def discarded_notification_count(self) -> int:
         with self._lock:
             return self._discarded_notification_count
+
+    @property
+    def profile_audit(self) -> GrokProfileAudit:
+        with self._lock:
+            return self._profile_audit
+
+    @property
+    def prompt_dispatch_total(self) -> int:
+        with self._lock:
+            return self._prompt_dispatch_total
+
+    def _record_profile_event(self, method: Any, params: Any) -> None:
+        category = _profile_event_category(method, params)
+        if category is None:
+            return
+        with self._lock:
+            current = self._profile_audit
+            values = {
+                "tool_event_count": current.tool_event_count,
+                "subagent_event_count": current.subagent_event_count,
+                "mcp_event_count": current.mcp_event_count,
+                "filesystem_event_count": current.filesystem_event_count,
+                "terminal_event_count": current.terminal_event_count,
+            }
+            values[category] += 1
+            self._profile_audit = GrokProfileAudit(**values)
+        raise AcpProtocolError("grok_chat_profile_violation")
 
     def _handle_response(self, message: Dict[str, Any]) -> None:
         request_id = message.get("id")
@@ -289,3 +351,41 @@ def _encode_notification(method: str, params: Dict[str, Any]) -> bytes:
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8") + b"\n"
+
+
+def _profile_event_category(method: Any, params: Any) -> Optional[str]:
+    if not isinstance(method, str):
+        return None
+    lowered = method.lower()
+    if "subagent" in lowered:
+        return "subagent_event_count"
+    if lowered.startswith(("x.ai/mcp/", "mcp/")):
+        return "mcp_event_count"
+    if lowered.startswith(("x.ai/fs/", "x.ai/fs_", "fs/")):
+        return "filesystem_event_count"
+    if lowered.startswith(("x.ai/terminal/", "terminal/")):
+        return "terminal_event_count"
+    if lowered == "session/request_permission" or lowered.startswith("x.ai/tool/"):
+        return "tool_event_count"
+    if not isinstance(params, dict):
+        return None
+    update = params.get("update")
+    if not isinstance(update, dict):
+        return None
+    update_type = update.get("sessionUpdate")
+    if not isinstance(update_type, str):
+        return None
+    normalized = update_type.lower()
+    if normalized in ("tool_call", "tool_call_update", "tool_call_delta_chunk"):
+        return "tool_event_count"
+    if "subagent" in normalized:
+        return "subagent_event_count"
+    if "mcp" in normalized:
+        return "mcp_event_count"
+    if normalized.startswith(("fs_", "filesystem_")):
+        return "filesystem_event_count"
+    if normalized.startswith(("terminal_", "shell_")):
+        return "terminal_event_count"
+    if normalized.startswith(("task_", "scheduled_task_", "monitor_")):
+        return "tool_event_count"
+    return None

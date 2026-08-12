@@ -221,6 +221,22 @@ class AgentGatewayService:
                     value["retryable"] = False
                 if event.conversation_id is not None:
                     value["conversation_id"] = event.conversation_id
+                if event.diagnostics is not None:
+                    diagnostics = event.diagnostics
+                    value["diagnostics"] = {
+                        "prompt_dispatch_count": diagnostics.prompt_dispatch_count,
+                        "visible_delta_count": diagnostics.visible_delta_count,
+                        "terminal_count": diagnostics.terminal_count,
+                        "cancel_dispatch_count": diagnostics.cancel_dispatch_count,
+                        "retry_classification": diagnostics.retry_classification,
+                        "retry_attempts": diagnostics.retry_attempts,
+                        "retry_max": diagnostics.retry_max,
+                        "tool_event_count": diagnostics.tool_event_count,
+                        "subagent_event_count": diagnostics.subagent_event_count,
+                        "mcp_event_count": diagnostics.mcp_event_count,
+                        "filesystem_event_count": diagnostics.filesystem_event_count,
+                        "terminal_event_count": diagnostics.terminal_event_count,
+                    }
                 yield value
         finally:
             self._finish_turn_once(handle.agent_id, handle.request_id)

@@ -20,11 +20,12 @@ from codex_gateway.agents.contracts import (
     AgentLogin,
     AgentModel,
     AgentTurnEvent,
+    AgentTurnDiagnostics,
     AgentTurnHandle,
 )
 from codex_gateway.grok_acp.contract import AUTH_METHOD_ID, parse_model_catalog
 from codex_gateway.grok_acp.process import GrokAcpSupervisor, GrokSupervisorState
-from codex_gateway.grok_acp.rpc import AcpNotification
+from codex_gateway.grok_acp.rpc import AcpNotification, GrokProfileAudit
 
 
 GROK_LOGIN_TTL_SECONDS = 10 * 60
@@ -64,6 +65,11 @@ class GrokTurnMetrics:
     retry_classification: str
     retry_attempts: int
     retry_max: int
+    tool_event_count: int
+    subagent_event_count: int
+    mcp_event_count: int
+    filesystem_event_count: int
+    terminal_event_count: int
 
 
 class _GrokSupervisor(Protocol):
@@ -110,6 +116,12 @@ class _GrokSupervisor(Protocol):
 
     def close_session(self, session_id: str) -> Dict[str, Any]: ...
 
+    @property
+    def profile_audit(self) -> GrokProfileAudit: ...
+
+    @property
+    def prompt_dispatch_count(self) -> int: ...
+
 
 @dataclass
 class _LoginAttempt:
@@ -143,6 +155,13 @@ class _GrokActiveTurn:
     retry_max: int = 0
     last_notification_sequence: int = 0
     prompt_id: Optional[str] = None
+    prompt_worker_started: bool = False
+    prompt_dispatch_baseline: int = 0
+    tool_event_count: int = 0
+    subagent_event_count: int = 0
+    mcp_event_count: int = 0
+    filesystem_event_count: int = 0
+    terminal_event_count: int = 0
 
 
 class GrokAgentAdapter:
@@ -394,6 +413,10 @@ class GrokAgentAdapter:
             if self._active_turn is not None:
                 raise GrokAdapterError("turn_already_active")
         binding = self._resolve_session(conversation_id, resume_existing, model_id)
+        audit = self._profile_audit()
+        if not audit.clean:
+            raise GrokAdapterError("grok_chat_profile_violation")
+        dispatch_baseline = self._supervisor.prompt_dispatch_count
         request_id = "grok_turn_" + secrets.token_hex(12)
         active = _GrokActiveTurn(
             request_id=request_id,
@@ -401,6 +424,12 @@ class GrokAgentAdapter:
             session_id=binding.backend_session_id,
             model_id=model_id,
             generation=binding.process_generation,
+            tool_event_count=audit.tool_event_count,
+            subagent_event_count=audit.subagent_event_count,
+            mcp_event_count=audit.mcp_event_count,
+            filesystem_event_count=audit.filesystem_event_count,
+            terminal_event_count=audit.terminal_event_count,
+            prompt_dispatch_baseline=dispatch_baseline,
         )
         with self._lock:
             if self._active_turn is not None:
@@ -434,6 +463,8 @@ class GrokAgentAdapter:
                     while not active.events:
                         active.condition.wait(0.5)
                         if not self.is_ready() and not active.terminal:
+                            self._refresh_profile_audit(active)
+                            self._refresh_prompt_dispatch(active)
                             self._terminal_locked(active, "error", "grok_process_lost")
                     event = active.events.popleft()
                 yield event
@@ -566,12 +597,14 @@ class GrokAgentAdapter:
         with active.condition:
             if active.terminal:
                 return
-            if active.prompt_dispatch_count != 0:
+            if active.prompt_worker_started:
                 self._terminal_locked(active, "error", "grok_prompt_dispatch_duplicate")
                 return
-            active.prompt_dispatch_count = 1
+            active.prompt_worker_started = True
         try:
             response = self._supervisor.prompt(active.session_id, text)
+            self._refresh_profile_audit(active)
+            self._refresh_prompt_dispatch(active)
             reason = response.get("stopReason")
             with active.condition:
                 if active.terminal:
@@ -583,8 +616,15 @@ class GrokAgentAdapter:
                 else:
                     self._terminal_locked(active, "error", "grok_turn_failed")
         except Exception:
+            self._refresh_profile_audit(active)
+            self._refresh_prompt_dispatch(active)
             with active.condition:
-                self._terminal_locked(active, "error", "grok_turn_failed")
+                code = (
+                    "grok_chat_profile_violation"
+                    if self._profile_violation(active)
+                    else "grok_turn_failed"
+                )
+                self._terminal_locked(active, "error", code)
 
     def _on_notification(self, notification: AcpNotification) -> None:
         with self._lock:
@@ -605,6 +645,8 @@ class GrokAgentAdapter:
         elif notification.method in ("x.ai/session_notification", "_x.ai/session/update"):
             self._handle_retry_update(active, params.get("update"))
         elif notification.method == "x.ai/session/prompt_complete":
+            self._refresh_profile_audit(active)
+            self._refresh_prompt_dispatch(active)
             reason = params.get("stopReason")
             with active.condition:
                 if reason in ("end_turn", "endTurn"):
@@ -742,6 +784,7 @@ class GrokAgentAdapter:
                 request_id=active.request_id,
                 event_type=event_type,
                 code=code,
+                diagnostics=self._diagnostics(active),
             )
         )
         active.condition.notify_all()
@@ -823,6 +866,61 @@ class GrokAgentAdapter:
             retry_classification=active.retry_classification,
             retry_attempts=active.retry_attempts,
             retry_max=active.retry_max,
+            tool_event_count=active.tool_event_count,
+            subagent_event_count=active.subagent_event_count,
+            mcp_event_count=active.mcp_event_count,
+            filesystem_event_count=active.filesystem_event_count,
+            terminal_event_count=active.terminal_event_count,
+        )
+
+    @staticmethod
+    def _diagnostics(active: _GrokActiveTurn) -> AgentTurnDiagnostics:
+        metrics = GrokAgentAdapter._metrics(active)
+        return AgentTurnDiagnostics(**metrics.__dict__)
+
+    def _profile_audit(self) -> GrokProfileAudit:
+        try:
+            return self._supervisor.profile_audit
+        except Exception as error:
+            raise GrokAdapterError("grok_profile_audit_unavailable") from error
+
+    def _refresh_profile_audit(self, active: _GrokActiveTurn) -> None:
+        try:
+            audit = self._profile_audit()
+        except GrokAdapterError:
+            return
+        with active.condition:
+            active.tool_event_count = max(active.tool_event_count, audit.tool_event_count)
+            active.subagent_event_count = max(active.subagent_event_count, audit.subagent_event_count)
+            active.mcp_event_count = max(active.mcp_event_count, audit.mcp_event_count)
+            active.filesystem_event_count = max(
+                active.filesystem_event_count,
+                audit.filesystem_event_count,
+            )
+            active.terminal_event_count = max(
+                active.terminal_event_count,
+                audit.terminal_event_count,
+            )
+
+    def _refresh_prompt_dispatch(self, active: _GrokActiveTurn) -> None:
+        try:
+            total = self._supervisor.prompt_dispatch_count
+        except Exception:
+            return
+        with active.condition:
+            delta = max(0, total - active.prompt_dispatch_baseline)
+            active.prompt_dispatch_count = min(2, delta)
+
+    @staticmethod
+    def _profile_violation(active: _GrokActiveTurn) -> bool:
+        return any(
+            (
+                active.tool_event_count,
+                active.subagent_event_count,
+                active.mcp_event_count,
+                active.filesystem_event_count,
+                active.terminal_event_count,
+            )
         )
 
     def _active_handle(self, handle: AgentTurnHandle) -> _GrokActiveTurn:

@@ -30,9 +30,9 @@ class AgentGatewayClientTest {
             Response.json("""{"agent_id":"grok","request_id":"login-1","status":"authenticated"}"""),
             Response.json("""{"object":"list","agent_id":"grok","data":[{"id":"model-a","display_name":"Model A","is_default":true,"modalities":["text"]}]}"""),
             Response.sse(
-                "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\",\"conversation_id\":\"conversation-1\"}\n\n" +
+                    "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\",\"conversation_id\":\"conversation-1\"}\n\n" +
                     "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"delta\",\"text\":\"fixture\"}\n\n" +
-                    "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"done\"}\n\n" +
+                    "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"done\",\"diagnostics\":{\"prompt_dispatch_count\":1,\"visible_delta_count\":1,\"terminal_count\":1,\"cancel_dispatch_count\":0,\"retry_classification\":\"none\",\"retry_attempts\":0,\"retry_max\":0,\"tool_event_count\":0,\"subagent_event_count\":0,\"mcp_event_count\":0,\"filesystem_event_count\":0,\"terminal_event_count\":0}}\n\n" +
                     "data: [DONE]\n\n",
             ),
             Response.json("""{"agent_id":"grok","status":"cancelled","request_id":"login-recovered"}"""),
@@ -59,6 +59,9 @@ class AgentGatewayClientTest {
         }
         assertEquals(3, events.size)
         assertTrue(events.all { it.agentId == AgentId.GROK })
+        val diagnostics = (events.last() as AgentTurnEvent.Completed).diagnostics
+        assertEquals(1, diagnostics?.promptDispatchCount)
+        assertEquals(0, diagnostics?.toolEventCount)
         assertFalse(control.stop(client))
         client.cancelActiveDeviceLogin(AgentId.GROK)
         client.logout(AgentId.GROK)
@@ -108,6 +111,54 @@ class AgentGatewayClientTest {
                 }
             }
             assertEquals(GatewayClientErrorCode.MALFORMED_RESPONSE, error.errorCode)
+        }
+    }
+
+    @Test
+    fun `terminal diagnostics reject sensitive shape invalid counts and Codex injection`() {
+        val invalidDiagnostics = listOf(
+            "{\"prompt_dispatch_count\":1}",
+            "{\"prompt_dispatch_count\":2,\"visible_delta_count\":0,\"terminal_count\":1,\"cancel_dispatch_count\":0,\"retry_classification\":\"none\",\"retry_attempts\":0,\"retry_max\":0,\"tool_event_count\":0,\"subagent_event_count\":0,\"mcp_event_count\":0,\"filesystem_event_count\":0,\"terminal_event_count\":0}",
+            "{\"prompt_dispatch_count\":1,\"visible_delta_count\":0,\"terminal_count\":1,\"cancel_dispatch_count\":0,\"retry_classification\":\"private reason\",\"retry_attempts\":0,\"retry_max\":0,\"tool_event_count\":0,\"subagent_event_count\":0,\"mcp_event_count\":0,\"filesystem_event_count\":0,\"terminal_event_count\":0}",
+        )
+        invalidDiagnostics.forEach { diagnostics ->
+            FakeAgentServer(
+                listOf(
+                    Response.sse(
+                        "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"start\"}\n\n" +
+                            "data: {\"id\":\"turn-1\",\"agent_id\":\"grok\",\"type\":\"done\",\"diagnostics\":$diagnostics}\n\n" +
+                            "data: [DONE]\n\n",
+                    ),
+                    Response.json("""{"agent_id":"grok","id":"turn-1","status":"interrupt_requested"}"""),
+                ),
+            ).use {
+                assertThrows(GatewayClientException::class.java) {
+                    runBlocking {
+                        AgentGatewayClient().stream(
+                            AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "fixture"),
+                        ).toList()
+                    }
+                }
+            }
+        }
+
+        FakeAgentServer(
+            listOf(
+                Response.sse(
+                    "data: {\"id\":\"turn-1\",\"agent_id\":\"codex\",\"type\":\"start\"}\n\n" +
+                        "data: {\"id\":\"turn-1\",\"agent_id\":\"codex\",\"type\":\"done\",\"diagnostics\":{}}\n\n" +
+                        "data: [DONE]\n\n",
+                ),
+                Response.json("""{"agent_id":"codex","id":"turn-1","status":"interrupt_requested"}"""),
+            ),
+        ).use {
+            assertThrows(GatewayClientException::class.java) {
+                runBlocking {
+                    AgentGatewayClient().stream(
+                        AgentGatewayChatRequest(AgentId.CODEX, null, "model-a", "fixture"),
+                    ).toList()
+                }
+            }
         }
     }
 

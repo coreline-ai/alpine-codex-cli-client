@@ -180,6 +180,23 @@ class AgentGatewayHttpTest(unittest.TestCase):
         self.assertEqual(["start", "done", "[DONE]"], [
             item if isinstance(item, str) else item["type"] for item in values
         ])
+        self.assertEqual(
+            {
+                "prompt_dispatch_count": 1,
+                "visible_delta_count": 0,
+                "terminal_count": 1,
+                "cancel_dispatch_count": 0,
+                "retry_classification": "none",
+                "retry_attempts": 0,
+                "retry_max": 0,
+                "tool_event_count": 0,
+                "subagent_event_count": 0,
+                "mcp_event_count": 0,
+                "filesystem_event_count": 0,
+                "terminal_event_count": 0,
+            },
+            values[1]["diagnostics"],
+        )
         self.assertEqual(1, len(self.harness.supervisor.new_session_calls))
         self.assertEqual(1, len(self.harness.supervisor.prompt_calls))
         turn_id = values[0]["id"]

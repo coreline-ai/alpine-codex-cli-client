@@ -119,6 +119,19 @@ the wire and race behavior narrowed by the project-owned typed adapter and fake 
 | `crates/codegen/xai-grok-shell/src/agent/handlers/models.rs` | `5d0b6c3bf72d8415e6dde463fa783c840287084f8cbf8db08354bbe151827306` | clean | live `x.ai/models/list` response source |
 | `crates/codegen/xai-grok-shell/src/session/result.rs` | `5b5600feafc2e9f204b96b5e558aa66c9d7fa23ec1763dfd18ff77fa1e2996c5` | clean | extension result envelope used by model list |
 
+### Phase 9 reviewed Grok profile-event sources
+
+These clean upstream files were reviewed at commit
+`be713136d2a69080743a3f6b3c72077057e5948f`. No code was copied. Their wire tags and method prefixes
+define the project-owned content-free profile audit and prompt-before-write gate.
+
+| Official source path | SHA-256 | Working tree | Reviewed contract |
+|---|---|---|---|
+| `crates/codegen/xai-grok-pager/docs/user-guide/15-agent-mode.md` | `9041902d818b961169dac32cc21c13623eb4497f48bd15f21b7dc6225741ded7` | clean | standard `tool_call`/`tool_call_update` events and xAI filesystem/terminal extension prefixes |
+| `crates/codegen/xai-grok-pager/src/app/subagent.rs` | `d3f91b29dae3188c7713feedc75a5cc892ce7dc9188a8627ddd12eb8fc75dcef` | clean | `subagent_*` and child-session tool event shapes |
+| `crates/codegen/xai-grok-mcp/src/wire.rs` | `bd8ad0cce53d1a524dc605db13c449ffdc35d1a99d2fd3a29d18cfe7f99193f5` | clean | `x.ai/mcp/*` request and reverse-request method names |
+| `crates/codegen/xai-grok-shell/src/tools/notification_bridge.rs` | `a6cf2fdad651411c89b1df9b94ced5a7eedf9a2a2f347725af69e39687f8872f` | clean | tool, terminal, task, and notification update bridge |
+
 ## Verification
 
 ```bash

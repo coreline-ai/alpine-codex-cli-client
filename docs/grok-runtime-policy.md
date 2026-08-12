@@ -60,6 +60,12 @@ the Phase 3 credential-free gate and G2. The authenticated real-session negative
 an explicit Phase 9 gate after the secure OAuth prerequisites: fixed-profile session creation must
 succeed while tool, subagent, MCP, filesystem, and terminal event counts remain zero.
 
+Phase 9 readiness now enforces this as code, not an operator-only observation. The ACP multiplexer
+classifies the pinned tool/subagent/MCP/filesystem/terminal wire families per generation and fails the
+generation on first observation. The first `session/prompt` checks the five counters while holding the
+same lock used for the JSONL write. The terminal SSE carries only redacted counters, and Android emits
+one fixed `AgentTurnAudit` line for post-turn evidence.
+
 ## Verification result
 
 On the redacted Samsung target, the debug-signed app was update-installed without clearing data.

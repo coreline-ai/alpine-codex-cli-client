@@ -42,6 +42,12 @@ generation, and backend session identities are checked before resume or prompt. 
 single-flight at both adapter and router levels. Switching is rejected while either operation is
 active, and no backend fallback or prompt replay exists.
 
+Grok terminal SSE events may include one `diagnostics` object containing only bounded dispatch,
+visible-delta, terminal, cancel, retry, and five forbidden-profile counters. It is attached to the
+existing authenticated stream and is not a new endpoint. Android rejects unknown fields, out-of-range
+counts, private retry strings, diagnostics on non-terminal events, and diagnostics injected into a
+Codex stream.
+
 ## Device OAuth state machine
 
 `authenticate(grok.com)` starts in a dedicated thread with a monotonically increasing
