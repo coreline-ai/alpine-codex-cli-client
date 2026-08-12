@@ -17,6 +17,9 @@ import dev.alpine.workspace.android.AppPrivateWorkspaceStore
 import dev.alpine.workspace.api.WorkspaceStore
 import dev.alpine.codexclient.cli.CodexCliArtifactProvider
 import dev.alpine.codexclient.cli.StagedCodexCli
+import dev.alpine.codexclient.grokcli.GrokCliArtifactProvider
+import dev.alpine.codexclient.grokcli.StagedGrokCli
+import dev.alpine.codexclient.grokcli.StagedGrokProfile
 import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactProvider
 import dev.alpine.codexclient.gatewaypack.StagedCodexGateway
 import dev.alpine.codexclient.bridge.CodexGatewayClient
@@ -41,7 +44,21 @@ class AlpineCodexApplication : Application() {
         private set
     lateinit var codexGatewayDirectory: File
         private set
+    lateinit var grokWorkspaceDirectory: File
+        private set
+    lateinit var grokHomeDirectory: File
+        private set
+    lateinit var grokStagingDirectory: File
+        private set
+    lateinit var grokProfileDirectory: File
+        private set
+    lateinit var grokWorkDirectory: File
+        private set
+    lateinit var grokGatewayDirectory: File
+        private set
     lateinit var codexCliArtifactProvider: CodexCliArtifactProvider
+        private set
+    lateinit var grokCliArtifactProvider: GrokCliArtifactProvider
         private set
     lateinit var codexGatewayArtifactProvider: CodexGatewayArtifactProvider
         private set
@@ -81,22 +98,51 @@ class AlpineCodexApplication : Application() {
             context = this,
             directory = workspaceDirectory,
         )
-        codexWorkspaceDirectory = ensurePrivateDirectory(
-            File(
+        codexWorkspaceDirectory = AppPrivatePathPolicy.ensureDirectory(
             workspaceDirectory,
-            CodexRuntimePaths.PRIVATE_WORKSPACE_DIRECTORY,
+            File(
+                workspaceDirectory,
+                CodexRuntimePaths.PRIVATE_WORKSPACE_DIRECTORY,
             ),
         )
-        codexHomeDirectory = ensurePrivateDirectory(
+        codexHomeDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
             File(codexWorkspaceDirectory, CodexRuntimePaths.HOME_DIRECTORY),
         )
-        codexStagingDirectory = ensurePrivateDirectory(
+        codexStagingDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
             File(codexWorkspaceDirectory, CodexRuntimePaths.STAGING_DIRECTORY),
         )
-        codexGatewayDirectory = ensurePrivateDirectory(
+        codexGatewayDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
             File(codexWorkspaceDirectory, CodexRuntimePaths.GATEWAY_DIRECTORY),
         )
+        grokWorkspaceDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(workspaceDirectory, GrokRuntimePaths.PRIVATE_WORKSPACE_DIRECTORY),
+        )
+        grokHomeDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(grokWorkspaceDirectory, GrokRuntimePaths.HOME_DIRECTORY),
+        )
+        grokStagingDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(grokWorkspaceDirectory, GrokRuntimePaths.STAGING_DIRECTORY),
+        )
+        grokProfileDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(grokWorkspaceDirectory, GrokRuntimePaths.PROFILE_DIRECTORY),
+        )
+        grokWorkDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(grokWorkspaceDirectory, GrokRuntimePaths.WORK_DIRECTORY),
+        )
+        grokGatewayDirectory = AppPrivatePathPolicy.ensureDirectory(
+            workspaceDirectory,
+            File(grokWorkspaceDirectory, GrokRuntimePaths.GATEWAY_DIRECTORY),
+        )
         codexCliArtifactProvider = CodexCliArtifactProvider(this)
+        grokCliArtifactProvider = GrokCliArtifactProvider(this)
         codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
         codexGatewayClient = CodexGatewayClient()
         codexChatBackend = CodexGatewayChatBackend(codexGatewayClient)
@@ -125,10 +171,28 @@ class AlpineCodexApplication : Application() {
         guestStagingDirectory = CodexRuntimePaths.GUEST_STAGING,
     )
 
+    /** Stages the pinned official Grok executable without starting a backend process. */
+    fun stageGrokCli(): StagedGrokCli = grokCliArtifactProvider.stage(
+        hostStagingDirectory = grokStagingDirectory,
+        guestStagingDirectory = GrokRuntimePaths.GUEST_STAGING,
+    )
+
+    /** Stages only the hash-locked text-only Agent profile with owner-read/write mode. */
+    fun stageGrokProfile(): StagedGrokProfile = grokCliArtifactProvider.stageProfile(
+        hostProfileDirectory = grokProfileDirectory,
+        guestProfileDirectory = GrokRuntimePaths.GUEST_PROFILE_DIRECTORY,
+    )
+
     /** Stages only the manifest-verified local Python supervisor package. */
     fun stageCodexGateway(): StagedCodexGateway = codexGatewayArtifactProvider.stage(
         hostGatewayDirectory = codexGatewayDirectory,
         guestGatewayDirectory = CodexRuntimePaths.GUEST_GATEWAY,
+    )
+
+    /** Stages the same manifest-verified supervisor package into Grok's disjoint tree. */
+    fun stageGrokGateway(): StagedCodexGateway = codexGatewayArtifactProvider.stage(
+        hostGatewayDirectory = grokGatewayDirectory,
+        guestGatewayDirectory = GrokRuntimePaths.GUEST_GATEWAY,
     )
 
     private fun stageGatewayLaunch(): GatewayLaunchSpec {
@@ -140,13 +204,6 @@ class AlpineCodexApplication : Application() {
             homeDirectory = CodexRuntimePaths.GUEST_HOME,
             workspaceDirectory = "/workspace",
         )
-    }
-
-    private fun ensurePrivateDirectory(directory: File): File {
-        check(directory.exists() || directory.mkdirs()) {
-            "cannot create app-private Codex workspace"
-        }
-        return directory
     }
 
     override fun onTerminate() {

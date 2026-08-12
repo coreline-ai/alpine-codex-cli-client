@@ -73,6 +73,21 @@ The upstream checksum is not a published signature. Phase 2 now fails closed on 
 static AArch64 ELF validation, app-private staging revalidation, APK hash audit, and Git exclusion.
 Every future upgrade remains a separate source/artifact review.
 
+### Phase 3 reviewed Grok launch/profile sources
+
+The following files were reviewed from clean upstream commit
+`be713136d2a69080743a3f6b3c72077057e5948f`. No upstream source file was copied into the project;
+the project implementation is an independently written, narrower policy.
+
+| Official source path | SHA-256 | Working tree | Reviewed contract |
+|---|---|---|---|
+| `crates/codegen/xai-grok-pager/src/app/cli.rs` | `f38cf8001db82e625c996608a2433a81700f30e47b108218a6f77b9a29cae160` | clean | `--cwd`, `--no-auto-update`, `agent stdio`, `--no-leader`, `--agent-profile` |
+| `crates/codegen/xai-grok-agent/src/config.rs` | `68178e65fe71291f7842002fe0e8beaacf45a79d56a303d6973a0137a8ba650a` | clean | camelCase profile fields, skill/MCP/subagent defaults |
+| `crates/codegen/xai-grok-agent/src/builder.rs` | `dd0dd24100ad64ac9b18c92905db227fba62adf112fc26d19937732cd8573348` | clean | allowlist sentinel, special integration tools, subagent stripping |
+| `crates/codegen/xai-grok-shell/src/agent/auth_method.rs` | `805e37750429a65cdfb0c50d78996880d80c4742eb270cde75d2af6a4aadd1b5` | clean | official key-auth disable gate |
+| `crates/codegen/xai-grok-shell/src/auth/flow.rs` | `7560e34d74a3d26d2275763aeb2161f8139435ff156fa11d17392ce3223a3dc3` | clean | Device Flow environment selection |
+| `crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs` | `1235616b00d9ea96dcd74c5019e3430db8b64bb180cea0b1e1eb9713f0e5a001` | clean | raw initialize capability breadth and authenticated session boundary |
+
 ## Verification
 
 ```bash

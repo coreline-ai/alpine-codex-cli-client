@@ -78,6 +78,9 @@ def check_source(project_root: Path) -> None:
             continue
         seen.add(path)
         text = path.read_text(encoding="utf-8")
+        # This exact official Grok admin kill-switch disables key-based auth. Mask only its
+        # identifier so the broad key-path detector cannot mistake a prohibition for support.
+        text = text.replace("GROK_DISABLE_API_KEY_AUTH", "GROK_KEY_AUTH_DISABLED")
         for label, pattern in FORBIDDEN_TEXT.items():
             if pattern.search(text):
                 fail(label, path.relative_to(project_root))

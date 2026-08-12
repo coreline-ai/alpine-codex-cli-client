@@ -78,7 +78,9 @@ Allowed environment names are limited to `HOME`, `GROK_HOME`, `GROK_LOGIN_DEVICE
 
 - The official CLI can internally recover authentication and resubmit before user-visible output. Android and Gateway dispatch remain exactly once; post-output retry must fail the turn.
 - The official artifact has no upstream signed checksum in the reviewed installer.
-- A project-owned chat-only profile still requires implementation and negative capability tests.
+- The project-owned chat-only profile is now size/hash locked with static negative tests. The
+  authenticated real-session no-tool assertion remains gated on secure OAuth in Phase 9 because the
+  official CLI rejects credential-free `session/new`.
 - Actual Device OAuth, dynamic account model listing, one real stream turn, Stop, force-stop recovery, and logout remain Phase 9 work.
 - Actual Grok OAuth is blocked until the secure/non-debuggable app, authenticated Gateway, and sensitive OAuth UI gates pass.
 

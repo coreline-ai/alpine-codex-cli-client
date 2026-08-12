@@ -19,6 +19,12 @@ data class StagedGrokCli(
     val guestExecutablePath: String,
 )
 
+data class StagedGrokProfile(
+    val profileName: String,
+    val sha256: String,
+    val guestProfilePath: String,
+)
+
 /** Stable, redacted artifact error; raw filesystem and asset details are intentionally omitted. */
 class GrokCliArtifactException : RuntimeException("GROK_CLI_ARTIFACT_INVALID")
 
@@ -53,6 +59,55 @@ class GrokCliArtifactProvider(private val context: Context) {
             version = lock.version,
             versionOutput = lock.versionOutput,
             guestExecutablePath = "$guestStagingDirectory/$ROOT_DIRECTORY/${lock.version}/${lock.binaryName}",
+        )
+    } catch (_: Exception) {
+        throw GrokCliArtifactException()
+    }
+
+    fun stageProfile(
+        hostProfileDirectory: File,
+        guestProfileDirectory: String,
+    ): StagedGrokProfile = try {
+        check(SAFE_GUEST_PATH.matches(guestProfileDirectory))
+        val lock = readProfileLock()
+        requireSafeProfileLock(lock)
+        val directory = ensurePrivateDirectory(hostProfileDirectory.canonicalFile)
+        val destination = File(directory, lock.fileName)
+        check(!Files.isSymbolicLink(destination.toPath()))
+        val temporary = File(directory, ".${lock.fileName}.${System.nanoTime()}.partial")
+        try {
+            context.assets.open("$PROFILE_ASSET_DIRECTORY/${lock.fileName}").use { input ->
+                FileOutputStream(temporary).use { output ->
+                    val buffer = ByteArray(16 * 1024)
+                    var copied = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        copied += count
+                        check(copied <= lock.size)
+                        output.write(buffer, 0, count)
+                    }
+                    output.fd.sync()
+                }
+            }
+            check(hasExpectedProfile(temporary, lock))
+            setProfileMode(temporary)
+            Files.move(
+                temporary.toPath(),
+                destination.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } finally {
+            temporary.delete()
+        }
+        check(!Files.isSymbolicLink(destination.toPath()))
+        check(hasExpectedProfile(destination, lock))
+        setProfileMode(destination)
+        StagedGrokProfile(
+            profileName = lock.profileName,
+            sha256 = lock.sha256,
+            guestProfilePath = "$guestProfileDirectory/${lock.fileName}",
         )
     } catch (_: Exception) {
         throw GrokCliArtifactException()
@@ -153,6 +208,20 @@ class GrokCliArtifactProvider(private val context: Context) {
         )
     }
 
+    private fun readProfileLock(): GrokProfileAssetLock {
+        val json = context.assets.open("$PROFILE_ASSET_DIRECTORY/$PROFILE_LOCK_FILE")
+            .bufferedReader()
+            .use { reader -> JSONObject(reader.readText()) }
+        return GrokProfileAssetLock(
+            schemaVersion = json.getInt("schema_version"),
+            profileName = json.getString("profile_name"),
+            fileName = json.getString("file_name"),
+            size = json.getLong("size"),
+            sha256 = json.getString("sha256"),
+            grokCliVersion = json.getString("grok_cli_version"),
+        )
+    }
+
     private fun requireSafeLock(lock: GrokCliAssetLock) {
         check(SEMVER.matches(lock.version))
         check(lock.target == "linux-aarch64-static")
@@ -164,6 +233,15 @@ class GrokCliArtifactProvider(private val context: Context) {
         check(Regex("grok ${Regex.escape(lock.version)} \\([0-9a-f]{10}\\)").matches(lock.versionOutput))
     }
 
+    private fun requireSafeProfileLock(lock: GrokProfileAssetLock) {
+        check(lock.schemaVersion == 1)
+        check(lock.profileName == "alpine-chat-only")
+        check(lock.fileName == "chat-only.md")
+        check(lock.size in 1..MAX_PROFILE_BYTES)
+        check(SHA_256.matches(lock.sha256))
+        check(lock.grokCliVersion == "1.0.0")
+    }
+
     private fun ensurePrivateDirectory(directory: File): File {
         check(directory.exists() || directory.mkdirs())
         check(directory.isDirectory)
@@ -173,10 +251,17 @@ class GrokCliArtifactProvider(private val context: Context) {
 
     private fun setDirectoryMode(directory: File) {
         Os.chmod(directory.absolutePath, MODE_OWNER_RWX)
+        check(Os.stat(directory.absolutePath).st_mode and MODE_MASK == MODE_OWNER_RWX)
     }
 
     private fun setExecutableMode(file: File) {
         Os.chmod(file.absolutePath, MODE_OWNER_RWX)
+        check(Os.stat(file.absolutePath).st_mode and MODE_MASK == MODE_OWNER_RWX)
+    }
+
+    private fun setProfileMode(file: File) {
+        Os.chmod(file.absolutePath, MODE_OWNER_RW)
+        check(Os.stat(file.absolutePath).st_mode and MODE_MASK == MODE_OWNER_RW)
     }
 
     private fun hasExpectedBinary(file: File, lock: GrokCliAssetLock): Boolean = runCatching {
@@ -185,6 +270,9 @@ class GrokCliArtifactProvider(private val context: Context) {
             sha256(file) == lock.binarySha256 &&
             isStaticAarch64Elf(file)
     }.getOrDefault(false)
+
+    private fun hasExpectedProfile(file: File, lock: GrokProfileAssetLock): Boolean =
+        file.isFile && file.length() == lock.size && sha256(file) == lock.sha256
 
     private fun isStaticAarch64Elf(file: File): Boolean = RandomAccessFile(file, "r").use { input ->
         val header = ByteArray(64)
@@ -231,17 +319,32 @@ class GrokCliArtifactProvider(private val context: Context) {
         val versionOutput: String,
     )
 
+    private data class GrokProfileAssetLock(
+        val schemaVersion: Int,
+        val profileName: String,
+        val fileName: String,
+        val size: Long,
+        val sha256: String,
+        val grokCliVersion: String,
+    )
+
     private companion object {
         const val ROOT_DIRECTORY = "grok-cli"
         const val QUARANTINE_DIRECTORY = "quarantine"
         const val ASSET_DIRECTORY = "grok-cli"
+        const val PROFILE_ASSET_DIRECTORY = "grok-profile"
         const val LOCK_FILE = "grok-cli.lock.json"
+        const val PROFILE_LOCK_FILE = "chat-only.lock.json"
         const val MAX_QUARANTINE_DIRECTORIES = 3
+        const val MAX_PROFILE_BYTES = 16 * 1024L
         const val MODE_OWNER_RWX = 448
+        const val MODE_OWNER_RW = 384
+        const val MODE_MASK = 511
         const val AARCH64_MACHINE = 183
         const val PROGRAM_HEADER_INTERPRETER = 3
         val ELF_MAGIC = byteArrayOf(0x7f, 0x45, 0x4c, 0x46)
         val SEMVER = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
         val SHA_256 = Regex("[0-9a-f]{64}")
+        val SAFE_GUEST_PATH = Regex("/[A-Za-z0-9_./-]+")
     }
 }
