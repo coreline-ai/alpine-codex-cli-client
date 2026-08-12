@@ -59,6 +59,18 @@ Phase 1의 허용 파일 목록과 source/destination hash는
 | `alpine-chat-feature/src/main/java/dev/alpine/chat/feature/ui/screens/chat/AlpineChatScreen.kt` | 동일 상대 경로 | `e8c9eb326ba3b25ceca58f35a638e22ce5288a20a8c3a5999698a9c5700187f8` | not imported |
 | `alpine-chat-feature/src/test/java/dev/alpine/chat/feature/ui/ChatGenerationStateTest.kt` | 동일 상대 경로 | `f7376c8f8f5e9eead6f03f1668fe4f3e7f794d121f497785f4d2bea09d529dcb` | not imported |
 
+## Official Grok source and artifact preflight
+
+No Grok source file or binary is copied or tracked in this Phase 0 entry. It records the reviewed upstream identity that Phase 2 must reproduce in a debug-generated artifact pack.
+
+| Item | Official source | Locked identity | Project state |
+|---|---|---|---|
+| Grok source snapshot | `https://github.com/xai-org/grok-build` | repository HEAD `be713136d2a69080743a3f6b3c72077057e5948f`; embedded source revision `5d08d7e4123092567ccd584cd9f99afa2972065c` | reviewed only; no source copied |
+| Grok Linux AArch64 artifact | `https://x.ai/cli/grok-1.0.0-linux-aarch64` | version `1.0.0`; size `133745832`; SHA-256 `bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f` | preflight only; binary not tracked |
+| Official installer | `https://x.ai/cli/install.sh` | Linux AArch64 selection and version smoke reviewed; no signed checksum validation observed | not copied or executed by the Android app |
+
+The upstream checksum is not a published signature. Phase 2 must fail closed on the project lock and document every future upgrade as a separate review.
+
 ## Verification
 
 ```bash
