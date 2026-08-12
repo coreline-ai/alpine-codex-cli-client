@@ -16,8 +16,8 @@ Date: `2026-08-12 KST`
 | Check | Result |
 |---|---|
 | Phase 8 secure/debug gate | PASS |
-| Final OAuth-readiness milestone | PASS: Python 83 tests, full JVM/Android/lint/APK/artifact/security gates |
-| Secure APK identity | `161105686` bytes; SHA-256 `7f9732ee7e9b7e8afccd1efc2dd3492024d65fb149ebe65f2399f2228d50ece3` |
+| Final OAuth-readiness milestone | PASS: Python 87 tests, full JVM/Android/lint/APK/artifact/security gates |
+| Secure APK identity | `161105686` bytes; SHA-256 `fa5d97b53756f15eb8a195ea88a64b38dd47bede1629dbd6d9c0c11ed698b10a` |
 | Exact Samsung identity precheck | PASS at last credential-free audit; must repeat immediately before mutation |
 | Official Grok Device OAuth approval | PENDING USER APPROVAL |
 | Dynamic model catalog | NOT RUN |
@@ -32,6 +32,7 @@ Date: `2026-08-12 KST`
 
 ## Permitted terminal evidence
 
-Only the content-free `AgentTurnAudit` line may be summarized here after each real turn. The summary
-must include dispatch, terminal, cancel, retry classification/counts, and the five profile-event
-counts. It must not include any identifier or message content.
+Only the content-free `AgentTurnAudit` line may be summarized here after each real turn. The line must
+first pass `scripts/verify-agent-turn-audit.py` in the matching `chat` or `stop` mode. The summary must
+include dispatch, terminal, cancel, retry classification/counts, and the five profile-event counts. It
+must not include any identifier or message content.

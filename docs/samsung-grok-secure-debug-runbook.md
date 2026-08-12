@@ -35,8 +35,10 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 
 1. Refresh the live model catalog and require at least one row.
 2. Select one live model; do not synthesize a fallback.
-3. Start a dedicated logcat view restricted to the `AgentTurnAudit` tag. Do not use a broad log dump,
-   screenshot, screen recording, or UI hierarchy dump after entering the test message.
+3. Start a dedicated `-v raw` logcat view restricted to the `AgentTurnAudit` tag. Pipe exactly the new
+   terminal line to `python3 scripts/verify-agent-turn-audit.py --mode chat`. The verifier reads stdin
+   only, retains nothing, and rejects extra fields or lines. Do not use a broad log dump, screenshot,
+   screen recording, or UI hierarchy dump after entering the test message.
 4. Enter one predetermined non-sensitive general-knowledge message and press Send once.
 5. Do not retry or resend on failure.
 6. Success requires one user node, one assistant node, and one terminal state in the app plus one
@@ -47,8 +49,10 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 
 1. Enter one separate non-sensitive request expected to stream long enough for Stop.
 2. Press Send once, then Stop once after generation begins.
-3. Success requires one terminal state, `prompt_dispatch=1`, `cancel` no greater than `1`, no automatic
-   replay, and all profile counters `0` in the dedicated audit line.
+3. Pipe exactly the new dedicated audit line to
+   `python3 scripts/verify-agent-turn-audit.py --mode stop`. Success requires one terminal state,
+   `prompt_dispatch=1`, `cancel=1`, no automatic replay, all profile counters `0`, and only the G1
+   pre-output retry classification if a CLI-internal retry occurred.
 
 ## 6. Lifecycle and Agent regression
 

@@ -51,6 +51,8 @@ bounded counts. It never contains request/session/conversation/model identifiers
 OAuth data, prompt/response text, private retry reason, or stderr. Grok stderr retains only observed
 byte count and truncation state. Phase 9 must inspect the dedicated audit tag, not dump a post-chat UI
 hierarchy or broad logcat buffer.
+The host verifier consumes exactly one audit line through stdin, accepts no file output, and rejects
+unknown suffixes, multiple lines, out-of-range counts, profile activity, and retry classes outside G1.
 
 ## Explicitly absent paths
 
