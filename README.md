@@ -24,3 +24,7 @@ JDK 17과 Android SDK 36이 필요합니다.
 ```
 
 상세 구현 순서와 검증 기준은 [개발 계획](dev-plan/implement_20260811_133123.md)을 따른다.
+
+## 라이선스
+
+이 프로젝트는 **GNU General Public License v3.0 (GPL-3.0)**으로 배포됩니다.
