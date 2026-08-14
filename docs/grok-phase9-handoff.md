@@ -67,15 +67,17 @@ sh scripts/verify-secure-debug-milestone.sh
 ## Git 인계 상태
 
 - Branch: `codex/implement-grok-agent`
-- HEAD: `007a290` (`Merge origin/main into codex/implement-grok-agent`)
+- 기능 통합 commit: `7c0f88a` (`feat: finalize Grok agent secure debug client`)
 - Base: `origin/main` `72e88c1`
-- 로컬 branch는 `origin/main`보다 13 commits 앞서며 동일 이름의 remote branch는 없다.
-- Phase 9 후속 수정과 Alpine Agent 테마 변경이 하나의 cumulative dirty working tree에 남아 있다.
-- staged file, 최종 handoff commit, push는 아직 없다.
+- 기능 통합 commit에는 Phase 9 후속 수정, Alpine Agent 테마, 회귀 테스트와 handoff 문서가
+  함께 포함됐다.
+- 2026-08-14 사용자 요청으로 기존 no-push 제한이 해제되어, 이 문서를 포함한 최종 HEAD를
+  `origin/main`에 fast-forward push했다.
+- 동일 이름의 remote feature branch는 만들지 않았다.
 - 기존 사용자 변경을 분리하거나 되돌리기 위해 reset/stash/rebase하지 않는다.
 
-최종 commit 전에는 현재 변경 전체를 다시 검토하고, Phase 9 단위로 commit할 범위를 명시적으로
-확정해야 한다. 이 문서 업데이트는 commit이나 push를 수행하지 않는다.
+인계 시 `git status --short --branch`가 clean이고 `git rev-parse HEAD origin/main`이 동일한지
+확인한다. 실제 OAuth·model·유료 turn·logout gate는 아래 완료되지 않은 Gate로 계속 추적한다.
 
 ## 주요 파일
 
@@ -97,5 +99,5 @@ sh scripts/verify-secure-debug-milestone.sh
 - [ ] Codex 무과금 회귀와 Grok 재선택
 - [ ] 별도 승인 후 official Grok logout
 - [ ] Runtime 종료 후 관련 child process 0
-- [ ] 누적 working tree 검토 후 로컬 handoff commit
-- [ ] push는 사용자 요청 전까지 0 유지
+- [x] 누적 working tree 검토 후 기능 통합 commit `7c0f88a`
+- [x] 사용자 명시 요청 후 최종 HEAD를 `origin/main`에 fast-forward push
