@@ -1,6 +1,6 @@
 # Architecture
 
-Date: `2026-08-12 KST`
+Date: `2026-08-14 KST`
 
 ## Runtime topology
 
@@ -54,6 +54,17 @@ Runtime stopped
 - Android/Gateway do not retry or replay a prompt and do not fall back to the other Agent.
 - Grok's permitted pre-output CLI-internal auth recovery is observed, not initiated by Android.
   Any retry after visible output fails the turn.
+
+## OAuth challenge handoff
+
+Codex와 Grok 모두 공식 CLI가 로그인 challenge를 소유한다. Gateway는 complete HTTPS URL을
+메모리에서 Android로 한 번 전달하고 저장하지 않는다. Grok은 `auth.x.ai` OAuth issuer와
+`accounts.x.ai` production account UI의 exact 두 host만 허용하며, Android가 같은 allowlist를
+다시 검증한 뒤 브라우저 handoff를 발생시킨다.
+
+Grok 로그인 클릭 직후 Android는 challenge 요청이 끝날 때까지 `LOGIN STARTING` 진행 상태를
+표시한다. 성공하면 URL은 UI state에 보존하지 않은 채 브라우저를 열고 `LOGIN_PENDING`으로
+전환한다. 실패하면 stable content-free error만 표시하며 자동으로 authenticate를 재시작하지 않는다.
 
 ## Terminal evidence flow
 

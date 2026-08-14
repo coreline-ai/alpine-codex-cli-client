@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.AlpineCodexClient" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <style name="Theme.AlpineCodexClient" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F4F3ED</item>
+        <item name="android:statusBarColor">#F4F3ED</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#B9F227</item>
+    </style>
 </resources>

@@ -58,12 +58,7 @@ FIXED_COMMAND = (
     GUEST_PROFILE.as_posix(),
     "stdio",
 )
-
-
-def child_umask() -> None:
-    """Apply the only permitted process umask immediately before exec."""
-
-    os.umask(0o077)
+CHILD_UMASK = 0o077
 
 
 @dataclass(frozen=True)

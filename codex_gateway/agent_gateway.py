@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Optional
 
 from codex_gateway.agents.grok import GrokAgentAdapter
@@ -11,7 +12,7 @@ from codex_gateway.agents.production import ManagedCodexAgentAdapter
 from codex_gateway.agents.router import AgentRouter
 from codex_gateway.agents.service import AgentGatewayService
 from codex_gateway.gateway import LOOPBACK_HOST, LoopbackGatewayServer
-from codex_gateway.grok_acp.policy import GUEST_EXECUTABLE, GUEST_HOME, GUEST_WORK
+from codex_gateway.grok_acp.policy import CHILD_UMASK, GUEST_EXECUTABLE, GUEST_HOME, GUEST_WORK
 from codex_gateway.security import SessionCapabilityVerifier, load_one_time_capability
 
 
@@ -88,6 +89,9 @@ def main() -> int:
         return 2
     if not args.codex.startswith("/workspace/.alpine-codex/staging/codex-cli/"):
         return 2
+    # This production process never restores a broader mask. Grok worker-thread launches can
+    # therefore use posix_spawn without a pre-exec callback or per-child umask operation.
+    os.umask(CHILD_UMASK)
     try:
         serve(args.codex, args.capability_file)
     except Exception:

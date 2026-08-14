@@ -6,10 +6,13 @@ import hashlib
 import hmac
 import json
 import secrets
+import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
+from codex_gateway import agent_gateway
 from codex_gateway.agents.grok import GrokAgentAdapter
 from codex_gateway.agents.http import make_agent_handler
 from codex_gateway.agents.contracts import AgentConversationBinding, AgentId
@@ -17,7 +20,47 @@ from codex_gateway.agents.router import AgentRouter
 from codex_gateway.agents.service import AgentGatewayService
 from codex_gateway.gateway import LOOPBACK_HOST, LoopbackGatewayServer
 from codex_gateway.security import SessionCapabilityVerifier
+from codex_gateway.grok_acp.rpc import (
+    AcpPendingLimit,
+    AcpProcessLost,
+    AcpProtocolError,
+    AcpRemoteError,
+    AcpStopped,
+    AcpTimeout,
+)
+from codex_gateway.grok_acp.policy import CHILD_UMASK
 from tests.test_grok_agent_adapter import FakeGrokSupervisor, agent_chunk, chat, retry_state
+
+
+class AgentGatewayEntrypointTest(unittest.TestCase):
+    def test_main_locks_private_process_umask_before_serving(self):
+        argv = [
+            "agent_gateway",
+            "--codex",
+            "/workspace/.alpine-codex/staging/codex-cli/0.147.0/codex",
+            "--grok",
+            agent_gateway.GUEST_EXECUTABLE.as_posix(),
+            "--codex-home",
+            agent_gateway.CODEX_HOME,
+            "--grok-home",
+            agent_gateway.GUEST_HOME.as_posix(),
+            "--grok-work",
+            agent_gateway.GUEST_WORK.as_posix(),
+            "--workdir",
+            agent_gateway.WORKSPACE,
+            "--capability-file",
+            agent_gateway.CAPABILITY_FILE,
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(agent_gateway.os, "umask") as umask,
+            mock.patch.object(agent_gateway, "serve") as serve,
+        ):
+            result = agent_gateway.main()
+
+        self.assertEqual(0, result)
+        umask.assert_called_once_with(CHILD_UMASK)
+        serve.assert_called_once()
 
 
 def sse_values(raw):
@@ -124,6 +167,24 @@ class AgentGatewayHttpTest(unittest.TestCase):
             self.assertEqual("gateway_auth_failed", value["error"]["code"])
         self.assertEqual([], self.harness.supervisor.authenticate_calls)
         self.assertEqual(12, len(self.harness.authorization_calls))
+
+    def test_grok_transport_failures_expose_only_closed_content_free_codes(self):
+        cases = (
+            (AcpProcessLost("private-process-detail"), "grok_acp_process_lost"),
+            (AcpProtocolError("private-protocol-detail"), "grok_acp_protocol_error"),
+            (AcpTimeout("private-timeout-detail"), "grok_acp_timeout"),
+            (AcpRemoteError("private-remote-detail"), "grok_acp_remote_error"),
+            (AcpPendingLimit("private-pending-detail"), "grok_acp_pending_limit"),
+            (AcpStopped("private-stop-detail"), "grok_acp_stopped"),
+        )
+        for failure, expected in cases:
+            with self.subTest(expected=expected):
+                self.harness.supervisor.auth_info = lambda failure=failure: (_ for _ in ()).throw(failure)
+                status, value = self.harness.request("GET", "/internal/agents/grok/account")
+                self.assertEqual(502, status)
+                self.assertEqual(expected, value["error"]["code"])
+                serialized = json.dumps(value)
+                self.assertNotIn("private", serialized)
 
     def test_fake_device_login_model_session_stream_and_logout_lifecycle(self):
         status, agents = self.harness.request("GET", "/v1/agents")
@@ -341,7 +402,7 @@ class AgentGatewayHttpTest(unittest.TestCase):
         def prompt(session_id, text):
             self.harness.supervisor.prompt_calls.append((session_id, text))
             self.harness.supervisor.emit(
-                "x.ai/session_notification",
+                "_x.ai/session_notification",
                 retry_state(
                     {
                         "type": "retrying",
@@ -371,7 +432,7 @@ class AgentGatewayHttpTest(unittest.TestCase):
         def prompt(session_id, text):
             self.harness.supervisor.prompt_calls.append((session_id, text))
             self.harness.supervisor.emit(
-                "x.ai/session_notification",
+                "_x.ai/session_notification",
                 retry_state(
                     {
                         "type": "exhausted",

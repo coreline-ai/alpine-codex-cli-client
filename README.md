@@ -10,7 +10,8 @@ Runtime에서 실행하는 debug 전용 멀티 Agent 채팅 클라이언트입�
 - Grok: 공식 CLI 1.0.0 artifact, Device OAuth, 동적 모델, ACP 스트리밍, Stop 구현 완료
 - 보안 gate: non-debuggable `secureDebug`, 인증된 loopback transport, app-private credential 격리,
   chat-only profile, 금지 ACP 이벤트 fail-closed, 민감 화면 보호 구현 완료
-- Samsung 실제 Grok OAuth·1턴·Stop·force-stop·logout: 사용자 OAuth 승인 전 Phase 9 대기
+- Samsung: 최신 host/UI 보정 secure APK 설치와 credential-free 전체 gate 완료. Runtime/Gateway/Grok
+  준비 상태이며, host 보정 뒤 공식 브라우저 OAuth 승인·실제 1턴·Stop·force-stop·logout은 미실행
 
 ## 고정 실행 경로
 
@@ -52,6 +53,8 @@ sh scripts/verify-secure-debug-milestone.sh
 - [Architecture](docs/architecture.md)
 - [Security model](docs/security-model.md)
 - [Samsung Grok secure-debug runbook](docs/samsung-grok-secure-debug-runbook.md)
+- [Grok Phase 9 handoff](docs/grok-phase9-handoff.md)
+- [Samsung Grok redacted E2E evidence](docs/samsung-grok-secure-debug-e2e.md)
 - [Grok Gateway contract](docs/grok-gateway-contract.md)
 - [Grok Runtime policy](docs/grok-runtime-policy.md)
 - [Debug SBOM and component inventory](docs/debug-sbom.md)

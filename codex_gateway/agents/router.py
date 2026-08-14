@@ -100,12 +100,12 @@ class AgentRouter:
             if self._active_turn is not None:
                 raise AgentRoutingError(409, "agent_turn_active")
             current_id = self._selected_agent
-            if target_id == current_id:
-                return self.state()
             target = self._adapters.get(target_id)
             if target is None:
                 raise AgentRoutingError(404, "agent_unavailable")
             current = self._adapters[current_id]
+            if target_id == current_id and current.is_ready():
+                return self.state()
             current_activity = current.activity()
             if current_activity.active_login:
                 raise AgentRoutingError(409, "agent_login_active")
@@ -121,8 +121,9 @@ class AgentRouter:
                 self._stable_error = "agent_stop_failed"
             raise AgentRoutingError(502, "agent_stop_failed") from error
         with self._lock:
-            # The previous Agent is already inactive. Keep the requested target selected even if
-            # activation fails; silently reactivating the previous Agent would be an auto fallback.
+            # The previous Agent, or the failed selected generation during same-Agent recovery,
+            # is already inactive. Keep the requested target selected even if activation fails;
+            # silently reactivating another Agent would be an auto fallback.
             self._selected_agent = target_id
         try:
             target.activate()

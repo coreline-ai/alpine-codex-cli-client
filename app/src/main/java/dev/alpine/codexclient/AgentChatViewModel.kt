@@ -8,6 +8,7 @@ import dev.alpine.codexclient.bridge.AgentGatewayChatBackend
 import dev.alpine.codexclient.bridge.AgentGatewayChatRequest
 import dev.alpine.codexclient.bridge.AgentGatewayChatTurn
 import dev.alpine.codexclient.bridge.AgentGatewayClient
+import dev.alpine.codexclient.bridge.AgentGatewayHealth
 import dev.alpine.codexclient.bridge.AgentId
 import dev.alpine.codexclient.bridge.AgentLogin
 import dev.alpine.codexclient.bridge.AgentModel
@@ -80,6 +81,18 @@ data class AgentChatUiState(
     )
 }
 
+internal fun AgentChatUiState.withDiscoveredAgents(
+    target: AgentId,
+    discoveredAgents: List<GatewayAgent>,
+): AgentChatUiState = if (selectedAgentId == target && discoveredAgents.isNotEmpty()) {
+    copy(agents = discoveredAgents)
+} else {
+    this
+}
+
+internal fun AgentGatewayHealth.requiresSelection(target: AgentId): Boolean =
+    selectedAgent != target || !backendReady
+
 /** Selected-Agent UI owner. It never starts a prompt while restoring or switching Agent state. */
 class AgentChatViewModel @JvmOverloads constructor(
     application: Application,
@@ -129,14 +142,17 @@ class AgentChatViewModel @JvmOverloads constructor(
                 )
             }
             val target = _state.value.selectedAgentId
-            val result = withContext(Dispatchers.IO) {
+            val (discoveredAgents, result) = withContext(Dispatchers.IO) {
+                var visibleAgents = emptyList<GatewayAgent>()
                 runCatching {
                     var health = gatewayClient.health()
                     var agents = gatewayClient.agents()
-                    if (health.selectedAgent != target) {
+                    visibleAgents = agents
+                    if (health.requiresSelection(target)) {
                         gatewayClient.selectAgent(target)
                         health = gatewayClient.health()
                         agents = agents.map { it.copy(selected = it.agentId == target) }
+                        visibleAgents = agents
                     }
                     if (health.selectedAgent != target || !health.backendReady) {
                         throw GatewayClientException(
@@ -144,8 +160,9 @@ class AgentChatViewModel @JvmOverloads constructor(
                         )
                     }
                     Triple(health, agents, gatewayClient.account(target))
-                }
+                }.let { visibleAgents to it }
             }
+            _state.update { it.withDiscoveredAgents(target, discoveredAgents) }
             result.fold(
                 onSuccess = { (_, agents, account) ->
                     _state.update { it.copy(agents = agents) }
@@ -799,7 +816,7 @@ class AgentChatViewModel @JvmOverloads constructor(
             val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return false
             val allowedHosts = when (agentId) {
                 AgentId.CODEX -> setOf("auth.openai.com", "chatgpt.com")
-                AgentId.GROK -> setOf("auth.x.ai")
+                AgentId.GROK -> setOf("auth.x.ai", "accounts.x.ai")
             }
             return uri.scheme == "https" && uri.host in allowedHosts && uri.userInfo == null &&
                 uri.fragment == null && uri.port in setOf(-1, 443) && !uri.path.isNullOrEmpty()

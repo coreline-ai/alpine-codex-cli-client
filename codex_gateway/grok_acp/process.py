@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import os
-from pathlib import Path
+import queue
 import subprocess
 import threading
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
@@ -21,7 +21,7 @@ from .contract import (
     parse_initialize_result,
 )
 from .diagnostics import DiscardingStderrDiagnostics
-from .policy import GrokLaunchPolicy, GrokPolicyError, child_umask
+from .policy import GrokLaunchPolicy, GrokPolicyError
 from .rpc import (
     AcpError,
     AcpNotification,
@@ -66,6 +66,7 @@ _METHOD_TIMEOUT_SECONDS: Mapping[_RequestMethod, float] = {
     _RequestMethod.SESSION_PROMPT: 900.0,
     _RequestMethod.SESSION_CLOSE: 15.0,
 }
+POST_INITIALIZE_STABILITY_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,18 @@ class GrokAcpSupervisor:
         self._stdout_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
         self._wait_thread: Optional[threading.Thread] = None
+        self._exit_event = threading.Event()
+        self._spawn_requests: "queue.SimpleQueue[tuple[Dict[str, Any], Dict[str, Any], threading.Event]]" = (
+            queue.SimpleQueue()
+        )
+        self._spawn_owner_thread: Optional[threading.Thread] = None
+        if self._spec.validate_policy:
+            self._spawn_owner_thread = threading.Thread(
+                target=self._spawn_owner_loop,
+                name="grok-acp-spawn-owner",
+                daemon=True,
+            )
+            self._spawn_owner_thread.start()
         self._initialize_state: Optional[GrokInitializeState] = None
         self._stderr = DiscardingStderrDiagnostics()
         self._fixture_timeout_scale = getattr(self, "_fixture_timeout_scale", 1.0)
@@ -167,6 +180,7 @@ class GrokAcpSupervisor:
             self._state = GrokSupervisorState.STARTING
             self._generation += 1
             generation = self._generation
+            self._exit_event.clear()
             self._initialize_state = None
 
         try:
@@ -175,17 +189,16 @@ class GrokAcpSupervisor:
                     raise GrokPolicyError()
                 self._policy.validate()
                 self._policy.permission_probe()
-            process = subprocess.Popen(
-                self._spec.command,
-                cwd=self._spec.working_directory,
-                env=dict(self._spec.environment),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-                close_fds=True,
-                preexec_fn=child_umask,
-            )
+            # The production Gateway requests this process from a ThreadingHTTPServer worker, but
+            # the long-lived spawn owner performs the actual Popen call. Keep the fixed working
+            # directory and close all unrelated descriptors without running any Python callback in
+            # the child. The entrypoint fixes umask 077 before starting request threads. Fixtures
+            # use the same descriptor-safe launch shape directly.
+            spawn_options: Dict[str, Any] = {
+                "cwd": self._spec.working_directory,
+                "close_fds": True,
+            }
+            process = self._spawn_process(spawn_options)
         except (OSError, ValueError, GrokPolicyError) as error:
             with self._lock:
                 self._state = GrokSupervisorState.FAILED
@@ -234,6 +247,27 @@ class GrokAcpSupervisor:
         try:
             response = self._typed_request(_RequestMethod.INITIALIZE, initialize_params())
             normalized = parse_initialize_result(response)
+            if self._spec.validate_policy:
+                # Pinned Grok CLI 1.0.0 can acknowledge initialize before its extension handlers
+                # are ready. Require a bounded no-exit interval, then complete one ordered,
+                # content-discarding auth-info request before publishing READY. This keeps the
+                # first HTTP account request from racing the CLI's post-initialize transition.
+                if self._exit_event.wait(POST_INITIALIZE_STABILITY_SECONDS):
+                    raise AcpProcessLost()
+                with self._lock:
+                    if self._state is not GrokSupervisorState.INITIALIZING:
+                        raise AcpProcessLost()
+                readiness = self._require_rpc().request(
+                    _RequestMethod.AUTH_INFO,
+                    {},
+                    self._method_timeout(_RequestMethod.AUTH_INFO),
+                )
+                if (
+                    not isinstance(readiness, dict)
+                    or len(readiness) > 128
+                    or readiness.get("methodId") not in (None, AUTH_METHOD_ID)
+                ):
+                    raise AcpProtocolError("grok_readiness_barrier_invalid")
         except (AcpError, ValueError, GrokSupervisorError) as error:
             self._fail(AcpProtocolError("grok_initialize_failed"), generation)
             raise GrokSupervisorError("grok_initialize_failed") from error
@@ -262,8 +296,12 @@ class GrokAcpSupervisor:
             },
         )
 
-    def get_auth_url(self) -> Dict[str, Any]:
-        return self._typed_request(_RequestMethod.AUTH_URL, {})
+    def get_auth_url(self, timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
+        return self._typed_request(
+            _RequestMethod.AUTH_URL,
+            {},
+            timeout_seconds=timeout_seconds,
+        )
 
     def cancel_auth(self, request_sequence: int) -> Dict[str, Any]:
         if not isinstance(request_sequence, int) or isinstance(request_sequence, bool) or request_sequence <= 0:
@@ -403,6 +441,7 @@ class GrokAcpSupervisor:
         params: Dict[str, Any],
         *,
         require_clean_profile: bool = False,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         with self._lock:
             if method is _RequestMethod.INITIALIZE:
@@ -413,10 +452,20 @@ class GrokAcpSupervisor:
                 raise GrokSupervisorError("grok_not_ready")
             generation = self._generation
         try:
+            method_timeout = self._method_timeout(method)
+            if timeout_seconds is not None:
+                if (
+                    not isinstance(timeout_seconds, (int, float))
+                    or isinstance(timeout_seconds, bool)
+                    or timeout_seconds <= 0
+                    or timeout_seconds > method_timeout
+                ):
+                    raise ValueError("Grok request timeout invalid")
+                method_timeout = float(timeout_seconds)
             return self._require_rpc().request(
                 method,
                 params,
-                self._method_timeout(method),
+                method_timeout,
                 require_clean_profile=require_clean_profile,
             )
         except (AcpTimeout, AcpProcessLost) as error:
@@ -427,6 +476,47 @@ class GrokAcpSupervisor:
 
     def _method_timeout(self, method: _RequestMethod) -> float:
         return _METHOD_TIMEOUT_SECONDS[method] * self._fixture_timeout_scale
+
+    def _spawn_process(self, spawn_options: Dict[str, Any]) -> subprocess.Popen[bytes]:
+        if not self._spec.validate_policy:
+            return self._open_process(spawn_options)
+        owner = self._spawn_owner_thread
+        if owner is None or not owner.is_alive():
+            raise OSError("Grok spawn owner unavailable")
+        completed = threading.Event()
+        outcome: Dict[str, Any] = {}
+        self._spawn_requests.put((spawn_options, outcome, completed))
+        completed.wait()
+        error = outcome.get("error")
+        if error is not None:
+            if isinstance(error, (OSError, ValueError)):
+                raise error
+            raise OSError("Grok spawn owner failed") from error
+        process = outcome.get("process")
+        if process is None:
+            raise OSError("Grok spawn owner returned no process")
+        return process
+
+    def _spawn_owner_loop(self) -> None:
+        while True:
+            spawn_options, outcome, completed = self._spawn_requests.get()
+            try:
+                outcome["process"] = self._open_process(spawn_options)
+            except Exception as error:
+                outcome["error"] = error
+            finally:
+                completed.set()
+
+    def _open_process(self, spawn_options: Dict[str, Any]) -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
+            self._spec.command,
+            env=dict(self._spec.environment),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            **spawn_options,
+        )
 
     def _fixed_working_directory(self, value: str) -> str:
         if not isinstance(value, str) or value != self._spec.working_directory:
@@ -489,6 +579,8 @@ class GrokAcpSupervisor:
             process.wait()
         except OSError:
             return
+        finally:
+            self._exit_event.set()
         with self._lock:
             active = generation == self._generation and self._state not in (
                 GrokSupervisorState.STOPPING,

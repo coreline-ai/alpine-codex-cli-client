@@ -12,23 +12,23 @@
     "session/prompt",
     "session/resume",
     "session/set_model",
-    "x.ai/auth/cancel",
-    "x.ai/auth/get_url",
-    "x.ai/auth/info",
-    "x.ai/auth/logout",
-    "x.ai/models/list"
+    "_x.ai/auth/cancel",
+    "_x.ai/auth/get_url",
+    "_x.ai/auth/info",
+    "_x.ai/auth/logout",
+    "_x.ai/models/list"
   ],
   "allowedNotificationMethods": [
     "_x.ai/session/update",
     "session/update",
-    "x.ai/session_notification",
-    "x.ai/session/prompt_complete"
+    "_x.ai/session_notification",
+    "_x.ai/session/prompt_complete"
   ],
   "forbiddenRequestMethods": [
-    "x.ai/auth/getBearerToken",
-    "x.ai/getApiKey",
-    "x.ai/setApiKey",
-    "x.ai/futureUnknown"
+    "_x.ai/auth/getBearerToken",
+    "_x.ai/getApiKey",
+    "_x.ai/setApiKey",
+    "_x.ai/futureUnknown"
   ],
   "initializeResult": {
     "_meta": {

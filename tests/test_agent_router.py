@@ -114,6 +114,41 @@ class AgentRouterTest(unittest.TestCase):
         self.assertEqual(0, codex.activate_calls)
         self.assertEqual(1, grok.activate_calls)
 
+    def test_same_selected_failed_backend_is_explicitly_restarted(self):
+        grok = FakeAdapter(AgentId.GROK, ready=False)
+        router = AgentRouter([grok], selected_agent=AgentId.GROK)
+
+        state = router.select("grok")
+
+        self.assertTrue(state.backend_ready)
+        self.assertEqual(1, grok.deactivate_calls)
+        self.assertEqual(1, grok.activate_calls)
+
+    def test_same_selected_ready_backend_remains_a_noop(self):
+        grok = FakeAdapter(AgentId.GROK, ready=True)
+        router = AgentRouter([grok], selected_agent=AgentId.GROK)
+
+        state = router.select("grok")
+
+        self.assertTrue(state.backend_ready)
+        self.assertEqual(0, grok.deactivate_calls)
+        self.assertEqual(0, grok.activate_calls)
+
+    def test_same_selected_recovery_still_rejects_adapter_activity(self):
+        grok = FakeAdapter(
+            AgentId.GROK,
+            ready=False,
+            activity=AgentActivity(active_login=True),
+        )
+        router = AgentRouter([grok], selected_agent=AgentId.GROK)
+
+        with self.assertRaises(AgentRoutingError) as error:
+            router.select("grok")
+
+        self.assertEqual("agent_login_active", error.exception.code)
+        self.assertEqual(0, grok.deactivate_calls)
+        self.assertEqual(0, grok.activate_calls)
+
     def test_invalid_request_ids_and_non_selected_operations_fail_before_state_change(self):
         router = AgentRouter([FakeAdapter(AgentId.CODEX), FakeAdapter(AgentId.GROK)])
         with self.assertRaises(AgentRoutingError) as error:

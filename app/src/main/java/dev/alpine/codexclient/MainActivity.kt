@@ -12,10 +12,12 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -48,12 +50,28 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.alpine.codexclient.bridge.CodexRuntimeLifecycle
+import dev.alpine.codexclient.ui.components.AlpinePanel
+import dev.alpine.codexclient.ui.components.AlpineSectionHeader
+import dev.alpine.codexclient.ui.components.AlpineStatusBadge
+import dev.alpine.codexclient.ui.theme.AlpineAgentTheme
+import dev.alpine.codexclient.ui.theme.AlpineAcid
+import dev.alpine.codexclient.ui.theme.AlpineError
+import dev.alpine.codexclient.ui.theme.AlpineErrorInk
+import dev.alpine.codexclient.ui.theme.AlpineInfo
+import dev.alpine.codexclient.ui.theme.AlpineInk
+import dev.alpine.codexclient.ui.theme.AlpineLocal
+import dev.alpine.codexclient.ui.theme.AlpineOutline
+import dev.alpine.codexclient.ui.theme.AlpinePaper
+import dev.alpine.codexclient.ui.theme.AlpineWarning
 
 class MainActivity : ComponentActivity() {
     private val runtimeViewModel: RuntimeViewModel by viewModels()
@@ -62,7 +80,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        setContent { AlpineAgentClientApp(runtimeViewModel, chatViewModel) }
+        setContent {
+            AlpineAgentTheme {
+                AlpineAgentClientApp(runtimeViewModel, chatViewModel)
+            }
+        }
     }
 }
 
@@ -180,6 +202,7 @@ private fun AlpineCodexClientApp(
             onPreparePython = runtimeViewModel::runSmoke,
             onPrepareCli = runtimeViewModel::prepareCodexCli,
             onAppServerSmoke = runtimeViewModel::runAppServerSmoke,
+            onGrokAcpSmoke = runtimeViewModel::runGrokAcpSmoke,
         )
     }
     if (showModels) {
@@ -365,25 +388,118 @@ internal fun RuntimeStatusSheet(
     onPreparePython: () -> Unit,
     onPrepareCli: () -> Unit,
     onAppServerSmoke: () -> Unit,
+    onGrokAcpSmoke: () -> Unit,
 ) {
     var showDiagnostics by remember { mutableStateOf(false) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val summaryLabel = runtimeSummaryLabel(runtimeState)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = AlpinePaper,
+        contentColor = AlpineInk,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Runtime 상태", style = MaterialTheme.typography.titleLarge)
-            Text("Alpine: ${runtimeState.lifecycle}")
-            Text("Gateway: ${runtimeState.gatewayLifecycle}")
-            Text("작업: ${runtimeState.status}")
-            runtimeState.errorCode?.let { Text("오류: ${it.name}") }
+            AlpineSectionHeader(
+                eyebrow = "LOCAL EXECUTION",
+                title = "Runtime 상태",
+                subtitle = "app-private Alpine, Gateway와 CLI 진단 상태를 제어합니다.",
+            )
+            AlpinePanel(
+                modifier = Modifier.fillMaxWidth(),
+                containerColor = AlpineInk,
+                contentColor = AlpinePaper,
+                borderColor = AlpineInk,
+                padding = PaddingValues(18.dp),
+            ) {
+                AlpineStatusBadge(
+                    label = summaryLabel,
+                    containerColor = if (runtimeState.errorCode == null) AlpineAcid else AlpineError,
+                    contentColor = if (runtimeState.errorCode == null) AlpineInk else AlpineErrorInk,
+                )
+                Text(
+                    text = runtimeSummaryHeadline(runtimeState),
+                    modifier = Modifier.padding(top = 14.dp),
+                    color = AlpinePaper,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    text = runtimeState.status,
+                    modifier = Modifier.padding(top = 6.dp),
+                    color = AlpinePaper.copy(alpha = 0.68f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            AlpinePanel(
+                modifier = Modifier.fillMaxWidth(),
+                padding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+            ) {
+                RuntimeStatusRow("ALPINE", runtimeState.lifecycle.name)
+                RuntimeStatusRow("GATEWAY", runtimeState.gatewayLifecycle.name)
+                RuntimeStatusRow("TASK", runtimeState.status)
+            }
+            runtimeState.errorCode?.let { error ->
+                AlpinePanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    containerColor = AlpineError,
+                    contentColor = AlpineErrorInk,
+                    borderColor = AlpineErrorInk.copy(alpha = 0.24f),
+                    padding = PaddingValues(14.dp),
+                ) {
+                    AlpineStatusBadge(
+                        label = "ACTION REQUIRED",
+                        containerColor = AlpineErrorInk,
+                        contentColor = AlpinePaper,
+                    )
+                    Text(
+                        text = error.name,
+                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
+            runtimeState.grokAcpSmoke?.let { outcome ->
+                val ready = outcome == GrokAcpSmokeOutcome.READY
+                AlpinePanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    containerColor = if (ready) AlpineLocal else AlpineError,
+                    contentColor = if (ready) AlpineInk else AlpineErrorInk,
+                    borderColor = AlpineOutline,
+                    padding = PaddingValues(14.dp),
+                ) {
+                    Text(
+                        text = "GROK ACP DIAGNOSTIC",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp,
+                        ),
+                    )
+                    Text(
+                        text = outcome.name,
+                        modifier = Modifier.padding(top = 4.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
             if (runtimeState.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.NOT_INSTALLED) {
-                Button(enabled = !runtimeState.busy && !generationActive, onClick = onInstall) { Text("Runtime 설치") }
+                Button(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    enabled = !runtimeState.busy && !generationActive,
+                    onClick = onInstall,
+                ) { Text("Runtime 설치") }
             }
             if (runtimeState.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.READY) {
-                Button(enabled = !runtimeState.busy && !generationActive, onClick = onStartAlpine) { Text("Alpine 시작") }
+                Button(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    enabled = !runtimeState.busy && !generationActive,
+                    onClick = onStartAlpine,
+                ) { Text("Alpine 시작") }
             }
             if (runtimeState.sessionActive) {
                 if (
@@ -393,14 +509,35 @@ internal fun RuntimeStatusSheet(
                     val pythonReady = runtimeState.gatewayPythonBootstrap == GatewayPythonBootstrapOutcome.ALREADY_AVAILABLE ||
                         runtimeState.gatewayPythonBootstrap == GatewayPythonBootstrapOutcome.INSTALLED
                     Button(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                         enabled = !runtimeState.busy && !generationActive && pythonReady,
                         onClick = onStartGateway,
                     ) { Text("Gateway 시작") }
-                    if (!pythonReady) Text("진단에서 Gateway Python 준비를 먼저 실행하세요.")
+                    if (!pythonReady) {
+                        AlpinePanel(
+                            modifier = Modifier.fillMaxWidth(),
+                            containerColor = AlpineWarning,
+                            borderColor = AlpineOutline,
+                            padding = PaddingValues(14.dp),
+                        ) {
+                            Text(
+                                text = "진단에서 Gateway Python 준비를 먼저 실행하세요.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
-                OutlinedButton(enabled = !runtimeState.busy && !generationActive, onClick = onStop) { Text("Runtime 종료") }
-                Box {
-                    OutlinedButton(enabled = !runtimeState.busy && !generationActive, onClick = { showDiagnostics = true }) {
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    enabled = !runtimeState.busy && !generationActive,
+                    onClick = onStop,
+                ) { Text("Runtime 종료") }
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                        enabled = !runtimeState.busy && !generationActive,
+                        onClick = { showDiagnostics = true },
+                    ) {
                         Text("진단 ▾")
                     }
                     DropdownMenu(expanded = showDiagnostics, onDismissRequest = { showDiagnostics = false }) {
@@ -425,12 +562,81 @@ internal fun RuntimeStatusSheet(
                                 onAppServerSmoke()
                             },
                         )
+                        DropdownMenuItem(
+                            text = { Text("Grok ACP 점검") },
+                            onClick = {
+                                showDiagnostics = false
+                                onGrokAcpSmoke()
+                            },
+                        )
                     }
                 }
             }
-            OutlinedButton(enabled = !runtimeState.busy && !generationActive, onClick = onRefresh) { Text("Runtime 상태 확인") }
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                enabled = !runtimeState.busy && !generationActive,
+                onClick = onRefresh,
+            ) { Text("Runtime 상태 확인") }
             Spacer(Modifier.size(16.dp))
         }
+    }
+}
+
+@Composable
+private fun RuntimeStatusRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.9.sp,
+            ),
+        )
+        Surface(
+            modifier = Modifier.size(8.dp),
+            color = runtimeStatusTone(value),
+            shape = MaterialTheme.shapes.extraSmall,
+        ) { }
+        Text(
+            text = value,
+            modifier = Modifier.weight(1.6f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+private fun runtimeSummaryLabel(state: RuntimeUiState): String = when {
+    state.errorCode != null -> "ACTION REQUIRED"
+    state.busy -> "OPERATION ACTIVE"
+    state.sessionActive && state.gatewayLifecycle == CodexRuntimeLifecycle.RUNNING -> "RUNTIME ACTIVE"
+    state.sessionActive -> "ALPINE ACTIVE"
+    state.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.NOT_INSTALLED -> "NOT INSTALLED"
+    else -> "RUNTIME READY"
+}
+
+private fun runtimeSummaryHeadline(state: RuntimeUiState): String = when {
+    state.errorCode != null -> "Runtime 상태를 다시 확인하세요."
+    state.busy -> "요청한 작업을 처리하고 있습니다."
+    state.sessionActive && state.gatewayLifecycle == CodexRuntimeLifecycle.RUNNING -> "Gateway가 실행 중입니다."
+    state.sessionActive -> "Alpine 세션이 실행 중입니다."
+    state.lifecycle == dev.alpine.runtime.api.RuntimeLifecycleState.NOT_INSTALLED -> "Runtime 설치가 필요합니다."
+    else -> "Runtime을 시작할 준비가 됐습니다."
+}
+
+private fun runtimeStatusTone(value: String): Color {
+    val normalized = value.uppercase()
+    return when {
+        normalized.contains("ERROR") || normalized.contains("FAILED") || normalized.contains("INVALID") -> AlpineErrorInk
+        normalized.contains("READY") || normalized.contains("RUNNING") || normalized.contains("PASSED") || normalized.contains("COMPLETED") -> AlpineAcid
+        normalized.contains("START") || normalized.contains("INSTALL") || normalized.contains("CHECK") || normalized.contains("STAGING") || normalized.contains("STOPPING") -> AlpineWarning
+        else -> AlpineInfo
     }
 }
 

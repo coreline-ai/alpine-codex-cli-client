@@ -10,10 +10,10 @@ from pathlib import Path
 
 
 EXPECTED_FORBIDDEN = {
-    "x.ai/auth/getBearerToken",
-    "x.ai/getApiKey",
-    "x.ai/setApiKey",
-    "x.ai/futureUnknown",
+    "_x.ai/auth/getBearerToken",
+    "_x.ai/getApiKey",
+    "_x.ai/setApiKey",
+    "_x.ai/futureUnknown",
 }
 EXPECTED_PUBLIC_SUPERVISOR_METHODS = {
     "add_notification_listener",
@@ -81,20 +81,43 @@ def verify(root):
     process_path = root / "codex_gateway/grok_acp/process.py"
     contract_tree = ast.parse(contract_path.read_text(), contract_path.as_posix())
     process_tree = ast.parse(process_path.read_text(), process_path.as_posix())
+    process_text = process_path.read_text()
+    entrypoint_text = (root / "codex_gateway/agent_gateway.py").read_text()
     allowed = enum_values(contract_tree, "_RequestMethod")
     if allowed != set(fixture.get("allowedRequestMethods", [])):
         raise SystemExit("Grok ACP request allowlist drift")
+    if any(method.startswith("x.ai/") for method in allowed):
+        raise SystemExit("unprefixed Grok extension method reached the wire allowlist")
     if allowed & forbidden:
         raise SystemExit("forbidden Grok ACP method is allowlisted")
     if public_methods(process_tree, "GrokAcpSupervisor") != EXPECTED_PUBLIC_SUPERVISOR_METHODS:
         raise SystemExit("Grok supervisor public surface drift")
+    for required in (
+        '"close_fds": True',
+        '"cwd": self._spec.working_directory',
+        "POST_INITIALIZE_STABILITY_SECONDS",
+        "_RequestMethod.AUTH_INFO",
+        "_spawn_owner_loop",
+        'name="grok-acp-spawn-owner"',
+    ):
+        if required not in process_text:
+            raise SystemExit("Grok production spawn hardening drift")
+    if "os.umask(CHILD_UMASK)" not in entrypoint_text:
+        raise SystemExit("Gateway private process umask drift")
 
     shipping = tuple((root / "codex_gateway/grok_acp").glob("*.py"))
     for path in shipping:
         text = path.read_text()
-        for method in forbidden:
+        forbidden_source_spellings = forbidden | {
+            method[1:] for method in forbidden if method.startswith("_")
+        }
+        for method in forbidden_source_spellings:
             if method in text:
                 raise SystemExit(f"forbidden Grok ACP method shipped in {path.name}")
+        if "preexec_fn" in text:
+            raise SystemExit(f"thread-unsafe Grok child preexec hook shipped in {path.name}")
+        if path == process_path and "umask=" in text:
+            raise SystemExit("per-child Grok umask disables the production spawn contract")
     print("Grok ACP contract: PASS")
 
 

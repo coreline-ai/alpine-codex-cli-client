@@ -12,6 +12,7 @@ import time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
 LOCK = threading.Lock()
+INITIALIZED_AT = 0.0
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "grok-acp-v1.0.0.json").read_text())
 
@@ -47,6 +48,7 @@ def initialize_result():
 
 
 def emit_initialize(request_id):
+    global INITIALIZED_AT
     if MODE == "initialize_timeout":
         time.sleep(2.0)
         return
@@ -86,6 +88,7 @@ def emit_initialize(request_id):
         ):
             os.write(sys.stderr.fileno(), chunk)
     emit(response(request_id, initialize_result()), split=MODE == "split")
+    INITIALIZED_AT = time.monotonic()
 
 
 def delayed_emit(seconds, value):
@@ -108,7 +111,7 @@ def handle(message):
             "duplicate_id",
             "reverse_request",
         }
-    if method == "x.ai/models/list":
+    if method == "_x.ai/models/list":
         if MODE in {"late_response", "hold"}:
             if MODE == "late_response":
                 delayed_emit(0.5, response(request_id, {"models": []}))
@@ -121,7 +124,7 @@ def handle(message):
         return True
     if method == "session/prompt":
         terminal = notification(
-            "x.ai/session/prompt_complete",
+            "_x.ai/session/prompt_complete",
             {
                 "sessionId": params.get("sessionId", "session-1"),
                 "promptId": "prompt-1",
@@ -144,16 +147,18 @@ def handle(message):
             return True
         emit(response(request_id, {}))
         return True
-    if method == "x.ai/auth/get_url":
+    if method == "_x.ai/auth/get_url":
         emit(response(request_id, {"auth_url": None, "mode": None}))
         return True
-    if method == "x.ai/auth/info":
+    if method == "_x.ai/auth/info":
+        if MODE == "reject_early_auth" and time.monotonic() - INITIALIZED_AT < 0.2:
+            return False
         emit(response(request_id, {"methodId": None}))
         return True
-    if method == "x.ai/auth/cancel":
+    if method == "_x.ai/auth/cancel":
         emit(response(request_id, {"cancelled": True}))
         return True
-    if method == "x.ai/auth/logout":
+    if method == "_x.ai/auth/logout":
         emit(response(request_id, {"ok": True}))
         return True
     if method == "session/new":

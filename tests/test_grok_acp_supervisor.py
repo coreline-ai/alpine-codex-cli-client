@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
 from codex_gateway.grok_acp.contract import (
     AUTH_METHOD_ID,
@@ -96,6 +98,10 @@ class GrokMultiplexerTest(unittest.TestCase):
         rpc.handle_object({"jsonrpc": "2.0", "id": 2, "result": {}}, generation=2)
         second.join(1.0)
         self.assertEqual([1, 2], [json.loads(payload)["id"] for payload in writes])
+        self.assertEqual(
+            ["_x.ai/models/list", "_x.ai/auth/info"],
+            [json.loads(payload)["method"] for payload in writes],
+        )
         self.assertEqual([{}, {}], results)
 
         timed_out = _AcpMultiplexer(lambda _: None, generation=3)
@@ -138,7 +144,7 @@ class GrokMultiplexerTest(unittest.TestCase):
         rpc.add_notification_listener(notifications.append)
         terminal = {
             "jsonrpc": "2.0",
-            "method": "x.ai/session/prompt_complete",
+            "method": "_x.ai/session/prompt_complete",
             "params": {"sessionId": "s", "promptId": "p"},
         }
         rpc.handle_object(terminal, generation=3)
@@ -157,7 +163,7 @@ class GrokMultiplexerTest(unittest.TestCase):
         rpc.handle_object(
             {
                 "jsonrpc": "2.0",
-                "method": "x.ai/session_notification",
+                "method": "_x.ai/session_notification",
                 "params": {
                     "sessionId": "session-1",
                     "update": {
@@ -172,7 +178,7 @@ class GrokMultiplexerTest(unittest.TestCase):
             generation=5,
         )
         self.assertEqual(1, len(notifications))
-        self.assertEqual("x.ai/session_notification", notifications[0].method)
+        self.assertEqual("_x.ai/session_notification", notifications[0].method)
 
     def test_chat_profile_audit_blocks_forbidden_activity_before_prompt_write(self):
         cases = (
@@ -247,6 +253,66 @@ class GrokSupervisorTest(unittest.TestCase):
             self.assertEqual(GrokSupervisorState.READY, self.supervisor.state)
             self.supervisor.stop()
 
+    def test_fixture_spawn_keeps_closed_descriptors_without_preexec_fn(self):
+        real_popen = subprocess.Popen
+        with mock.patch(
+            "codex_gateway.grok_acp.process.subprocess.Popen",
+            wraps=real_popen,
+        ) as popen:
+            self.start()
+        kwargs = popen.call_args.kwargs
+        self.assertTrue(kwargs["close_fds"])
+        self.assertEqual(ROOT.as_posix(), kwargs["cwd"])
+        self.assertNotIn("umask", kwargs)
+        self.assertNotIn("preexec_fn", kwargs)
+
+    def test_production_spawn_uses_fixed_cwd_closed_fds_and_no_child_callback(self):
+        class Policy:
+            work = ROOT
+
+            def command(self):
+                return (sys.executable, "-u", FAKE.as_posix(), "reject_early_auth")
+
+            def environment(self):
+                return dict(os.environ)
+
+            def validate(self):
+                return None
+
+            def permission_probe(self):
+                return None
+
+        real_popen = subprocess.Popen
+        caller_thread = threading.get_ident()
+        spawn_threads = []
+
+        def record_popen(*args, **kwargs):
+            spawn_threads.append(threading.get_ident())
+            return real_popen(*args, **kwargs)
+
+        with (
+            mock.patch(
+                "codex_gateway.grok_acp.process.GrokLaunchPolicy.production",
+                return_value=Policy(),
+            ),
+            mock.patch(
+                "codex_gateway.grok_acp.process.subprocess.Popen",
+                side_effect=record_popen,
+            ) as popen,
+        ):
+            self.supervisor = GrokAcpSupervisor()
+            self.supervisor.start()
+            self.assertEqual({"methodId": None}, self.supervisor.auth_info())
+        kwargs = popen.call_args.kwargs
+        self.assertTrue(kwargs["close_fds"])
+        self.assertEqual(ROOT.as_posix(), kwargs["cwd"])
+        self.assertNotIn("umask", kwargs)
+        self.assertNotIn("preexec_fn", kwargs)
+        self.assertEqual(1, len(spawn_threads))
+        self.assertNotEqual(caller_thread, spawn_threads[0])
+        self.assertIsNotNone(self.supervisor._spawn_owner_thread)
+        self.assertTrue(self.supervisor._spawn_owner_thread.is_alive())
+
     def test_malformed_invalid_utf8_oversized_unknown_duplicate_and_reverse_request_fail_closed(self):
         for mode in (
             "malformed_json",
@@ -310,7 +376,7 @@ class GrokSupervisorTest(unittest.TestCase):
         self.supervisor.add_notification_listener(notifications.append)
         result = self.supervisor.prompt("session-1", "fixture prompt")
         self.assertEqual("end_turn", result["stopReason"])
-        terminal = [n for n in notifications if n.method == "x.ai/session/prompt_complete"]
+        terminal = [n for n in notifications if n.method == "_x.ai/session/prompt_complete"]
         self.assertEqual(1, len(terminal))
         self.assertEqual(sorted(n.sequence for n in notifications), [n.sequence for n in notifications])
 
@@ -321,6 +387,18 @@ class GrokSupervisorTest(unittest.TestCase):
             self.supervisor.authenticate(0)
         with self.assertRaises(ValueError):
             self.supervisor.authenticate(True)
+
+    def test_all_allowlisted_extensions_use_official_underscore_wire_prefix(self):
+        self.start()
+        self.assertEqual({"methodId": None}, self.supervisor.auth_info())
+        self.assertEqual({"auth_url": None, "mode": None}, self.supervisor.get_auth_url())
+        self.assertEqual({"auth_url": None, "mode": None}, self.supervisor.get_auth_url(0.5))
+        for timeout in (0, -1, True, 31):
+            with self.assertRaises(ValueError):
+                self.supervisor.get_auth_url(timeout)
+        self.assertEqual({"cancelled": True}, self.supervisor.cancel_auth(7))
+        self.assertEqual({"ok": True}, self.supervisor.logout())
+        self.assertEqual({"models": []}, self.supervisor.list_models())
 
     def test_shutdown_cancels_active_request_and_reaps_child(self):
         self.start("hold", timeout_scale=1.0)

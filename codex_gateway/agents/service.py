@@ -8,6 +8,14 @@ from typing import Any, Dict, Iterator, Optional
 from codex_gateway.agents.contracts import AgentId, AgentLogin, AgentTurnHandle
 from codex_gateway.agents.grok import GrokAdapterError
 from codex_gateway.agents.router import AgentOperation, AgentRouter, AgentRoutingError
+from codex_gateway.grok_acp.rpc import (
+    AcpPendingLimit,
+    AcpProcessLost,
+    AcpProtocolError,
+    AcpRemoteError,
+    AcpStopped,
+    AcpTimeout,
+)
 
 
 class AgentServiceError(RuntimeError):
@@ -330,4 +338,18 @@ class AgentGatewayService:
             if code == "grok_not_ready":
                 return AgentServiceError(503, code)
             return AgentServiceError(502, code)
+        # Transport failures are already content-free exception classes. Preserve only the
+        # closed category here so a real-device failure can be diagnosed without forwarding
+        # child output, request data, identifiers, or an exception message over HTTP.
+        acp_codes = (
+            (AcpProcessLost, "grok_acp_process_lost"),
+            (AcpProtocolError, "grok_acp_protocol_error"),
+            (AcpTimeout, "grok_acp_timeout"),
+            (AcpRemoteError, "grok_acp_remote_error"),
+            (AcpPendingLimit, "grok_acp_pending_limit"),
+            (AcpStopped, "grok_acp_stopped"),
+        )
+        for error_type, stable_code in acp_codes:
+            if isinstance(error, error_type):
+                return AgentServiceError(502, stable_code)
         return AgentServiceError(502, "agent_request_failed")

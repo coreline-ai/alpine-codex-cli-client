@@ -1,6 +1,6 @@
 # Security model
 
-Date: `2026-08-12 KST`
+Date: `2026-08-14 KST`
 
 ## Protected assets
 
@@ -17,7 +17,7 @@ Date: `2026-08-12 KST`
 | Android to Gateway | loopback only, strict Host/Origin/body shape, per-request HMAC, timestamp and nonce replay window |
 | Gateway to CLI | fixed executable/arguments/environment, closed typed method enum, bounded JSONL and timeouts |
 | Codex vs Grok | separate HOME, credential, config, session, and Agent-tagged conversation state |
-| OAuth to Android | official complete Device URL only, fixed HTTPS host allowlist, memory-only browser handoff |
+| OAuth to Android | official complete Device URL only, fixed HTTPS host allowlist, memory-only browser handoff; Grok exact hosts are `auth.x.ai` and `accounts.x.ai` |
 | Conversation at rest | Android Keystore-backed AES-GCM with application-bound AAD and versioned migration |
 | Sensitive UI | global `FLAG_SECURE`; no OAuth URL persistence; Codex code clipboard is marked sensitive |
 | Build artifact | debug certificate only, secure app non-debuggable, lab app blocks real OAuth, release path absent |

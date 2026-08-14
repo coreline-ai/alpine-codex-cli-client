@@ -29,6 +29,8 @@ from codex_gateway.grok_acp.rpc import AcpNotification, GrokProfileAudit
 
 
 GROK_LOGIN_TTL_SECONDS = 10 * 60
+GROK_AUTH_URL_READY_TIMEOUT_SECONDS = 15.0
+GROK_AUTH_URL_POLL_SECONDS = 0.1
 MAX_LOGIN_RECORDS = 16
 MAX_CONVERSATIONS = 64
 MAX_MESSAGE_BYTES = 16 * 1024
@@ -37,7 +39,7 @@ MAX_STREAM_TOTAL_BYTES = 256 * 1024
 MAX_STREAM_EVENTS = 128
 MAX_RETRY_ATTEMPTS = 32
 MAX_COMPLETED_TURN_IDS = 32
-GROK_AUTH_ALLOWED_HOSTS = frozenset({"auth.x.ai"})
+GROK_AUTH_ALLOWED_HOSTS = frozenset({"auth.x.ai", "accounts.x.ai"})
 TERMINAL_LOGIN_STATES = frozenset({"authenticated", "failed", "cancelled", "expired"})
 
 
@@ -92,7 +94,7 @@ class _GrokSupervisor(Protocol):
 
     def authenticate(self, request_sequence: int) -> Dict[str, Any]: ...
 
-    def get_auth_url(self) -> Dict[str, Any]: ...
+    def get_auth_url(self, timeout_seconds: Optional[float] = None) -> Dict[str, Any]: ...
 
     def cancel_auth(self, request_sequence: int) -> Dict[str, Any]: ...
 
@@ -300,8 +302,7 @@ class GrokAgentAdapter:
             self._fail_login_start(request_id, sequence)
             raise GrokAdapterError("grok_login_start_failed")
         try:
-            response = self._supervisor.get_auth_url()
-            verification_url = self._validated_device_url(response)
+            verification_url = self._wait_for_device_url()
         except Exception as error:
             self._fail_login_start(request_id, sequence)
             raise GrokAdapterError("grok_login_challenge_invalid") from error
@@ -315,6 +316,20 @@ class GrokAgentAdapter:
             expires_in_seconds=GROK_LOGIN_TTL_SECONDS,
             poll_interval_seconds=None,
         )
+
+    def _wait_for_device_url(self) -> str:
+        deadline = self._now() + GROK_AUTH_URL_READY_TIMEOUT_SECONDS
+        while True:
+            remaining = deadline - self._now()
+            if remaining <= 0:
+                raise GrokAdapterError("grok_login_challenge_invalid")
+            response = self._supervisor.get_auth_url(remaining)
+            if not self._auth_url_unready(response):
+                return self._validated_device_url(response)
+            remaining = deadline - self._now()
+            if remaining <= 0:
+                raise GrokAdapterError("grok_login_challenge_invalid")
+            time.sleep(min(GROK_AUTH_URL_POLL_SECONDS, remaining))
 
     def login_status(self, request_id: str) -> AgentLogin:
         self._identifier(request_id)
@@ -642,9 +657,9 @@ class GrokAgentAdapter:
                 return
         if notification.method == "session/update":
             self._handle_content_update(active, params.get("update"))
-        elif notification.method in ("x.ai/session_notification", "_x.ai/session/update"):
+        elif notification.method in ("_x.ai/session_notification", "_x.ai/session/update"):
             self._handle_retry_update(active, params.get("update"))
-        elif notification.method == "x.ai/session/prompt_complete":
+        elif notification.method == "_x.ai/session/prompt_complete":
             self._refresh_profile_audit(active)
             self._refresh_prompt_dispatch(active)
             reason = params.get("stopReason")
@@ -834,7 +849,7 @@ class GrokAgentAdapter:
             return False
         if isinstance(meta, dict) and meta.get("isReplay") is True:
             return False
-        prompt_id = params.get("promptId") if method == "x.ai/session/prompt_complete" else None
+        prompt_id = params.get("promptId") if method == "_x.ai/session/prompt_complete" else None
         if prompt_id is None and isinstance(meta, dict):
             prompt_id = meta.get("promptId")
         if prompt_id is None:
@@ -951,6 +966,15 @@ class GrokAgentAdapter:
         if not isinstance(result, dict) or len(result) > 128:
             raise GrokAdapterError("grok_extension_response_invalid")
         return result
+
+    @staticmethod
+    def _auth_url_unready(response: Dict[str, Any]) -> bool:
+        return (
+            isinstance(response, dict)
+            and len(response) <= 16
+            and response.get("auth_url") is None
+            and response.get("mode") in (None, "device")
+        )
 
     @staticmethod
     def _validated_device_url(response: Dict[str, Any]) -> str:

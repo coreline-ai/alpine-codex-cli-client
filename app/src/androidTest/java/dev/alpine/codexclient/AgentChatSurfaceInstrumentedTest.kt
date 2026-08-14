@@ -2,7 +2,6 @@ package dev.alpine.codexclient
 
 import android.content.pm.ActivityInfo
 import android.view.WindowManager
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -23,6 +22,7 @@ import dev.alpine.codexclient.bridge.AgentCapabilities
 import dev.alpine.codexclient.bridge.AgentId
 import dev.alpine.codexclient.bridge.AgentModel
 import dev.alpine.codexclient.bridge.GatewayAgent
+import dev.alpine.codexclient.ui.theme.AlpineAgentTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -32,11 +32,45 @@ class AgentChatSurfaceInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<Phase6TestActivity>()
 
     @Test
+    fun grokLoginClickImmediatelyShowsChallengePreparationProgress() {
+        val refreshing = mutableStateOf(false)
+        var loginRequests = 0
+        compose.setContent {
+            AlpineAgentTheme {
+                AgentChatViewport(
+                    state = AgentChatUiState(
+                        connection = AgentConnectionState.LOGIN_REQUIRED,
+                        selectedAgentId = AgentId.GROK,
+                        refreshing = refreshing.value,
+                    ),
+                    onLogin = {
+                        loginRequests++
+                        refreshing.value = true
+                    },
+                    onCancelRecoveredLogin = {},
+                    onRefresh = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("agent-login-action")
+            .assertTextEquals("Grok 로그인")
+            .assertIsEnabled()
+            .performClick()
+        assertEquals(1, loginRequests)
+        compose.onNodeWithText("LOGIN STARTING").assertIsDisplayed()
+        compose.onNodeWithText("로그인 주소 요청 중").assertIsDisplayed()
+        compose.onNodeWithTag("agent-login-action")
+            .assertTextEquals("로그인 준비 중…")
+            .assertIsNotEnabled()
+    }
+
+    @Test
     fun agentSelectorRendersOneAndTwoAgentsAndLocksDuringSwitching() {
         val scenario = mutableStateOf(0)
         var selected: AgentId? = null
         compose.setContent {
-            MaterialTheme {
+            AlpineAgentTheme {
                 val agents = if (scenario.value == 0) listOf(agent(AgentId.CODEX, true)) else {
                     listOf(agent(AgentId.CODEX, true), agent(AgentId.GROK, false))
                 }
@@ -79,7 +113,7 @@ class AgentChatSurfaceInstrumentedTest {
         val scenario = mutableStateOf(0)
         var selected: String? = null
         compose.setContent {
-            MaterialTheme {
+            AlpineAgentTheme {
                 val models = when (scenario.value) {
                     0 -> emptyList()
                     1 -> listOf(model("one", true))
@@ -129,7 +163,7 @@ class AgentChatSurfaceInstrumentedTest {
     fun grokLoginDoesNotExposeUrlOrCodeAndCodexCodeHasNoTextSemantics() {
         val showCodex = mutableStateOf(false)
         compose.setContent {
-            MaterialTheme {
+            AlpineAgentTheme {
                 AgentDeviceLoginSheet(
                     challenge = if (showCodex.value) {
                         AgentLoginChallenge(
@@ -178,7 +212,7 @@ class AgentChatSurfaceInstrumentedTest {
         var actions = 0
         try {
             compose.setContent {
-                MaterialTheme {
+                AlpineAgentTheme {
                     AgentComposer(
                         state = AgentChatUiState(
                             connection = if (generating.value) {
@@ -216,7 +250,7 @@ class AgentChatSurfaceInstrumentedTest {
         val secureFlag = WindowManager.LayoutParams.FLAG_SECURE
         val originalFlags = compose.activity.window.attributes.flags
         compose.setContent {
-            MaterialTheme { SecureLoginWindow(secure.value) }
+            AlpineAgentTheme { SecureLoginWindow(secure.value) }
         }
 
         compose.runOnUiThread { secure.value = true }

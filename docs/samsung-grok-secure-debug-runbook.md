@@ -1,6 +1,6 @@
 # Samsung Grok secure-debug runbook
 
-Date: `2026-08-12 KST`
+Date: `2026-08-14 KST`
 
 This runbook is the only approved real-account path for Phase 9. It never uninstalls the target app,
 clears app data, copies credential files, or reads OAuth/account payloads.
@@ -26,10 +26,14 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 
 1. Obtain the user's explicit `Grok OAuth 시작 승인`.
 2. Start Device OAuth exactly once in the app.
-3. The user completes the official xAI browser approval physically.
-4. Observe only `authenticated=true`; do not inspect or retain the URL, challenge, account fields, or
+3. Require immediate `LOGIN STARTING`/`로그인 주소 요청 중` feedback, followed by an official xAI
+   browser handoff. The exact production hosts are `auth.x.ai` and `accounts.x.ai`; do not accept a
+   subdomain or suffix lookalike.
+4. The user completes the official xAI browser approval physically.
+5. Observe only `authenticated=true`; do not inspect or retain the URL, challenge, account fields, or
    browser contents.
-5. On cancellation, expiry, or failure, do not restart automatically.
+6. On cancellation, expiry, `grok_login_challenge_invalid`, or browser failure, do not restart
+   automatically.
 
 ## 4. Model and first real turn
 
@@ -72,3 +76,5 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 5. Record only redacted status and count evidence in
    `docs/samsung-grok-secure-debug-e2e.md`, rerun the evidence scanner, and never commit captures or
    logs.
+
+현재 실행 기준선과 Git 상태는 `docs/grok-phase9-handoff.md`를 따른다.

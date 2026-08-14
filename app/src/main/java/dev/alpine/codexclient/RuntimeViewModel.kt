@@ -12,6 +12,7 @@ import dev.alpine.runtime.api.RuntimeOperationException
 import dev.alpine.runtime.host.RuntimeHostOperation
 import dev.alpine.runtime.host.RuntimeHostState
 import dev.alpine.codexclient.cli.CodexCliArtifactException
+import dev.alpine.codexclient.grokcli.GrokCliArtifactException
 import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactException
 import dev.alpine.codexclient.bridge.CodexRuntimeLifecycle
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 
 data class RuntimeUiState(
     val lifecycle: RuntimeLifecycleState,
@@ -34,6 +37,7 @@ data class RuntimeUiState(
     val gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
     val codexCliBootstrap: CodexCliBootstrapOutcome? = null,
     val appServerSmoke: AppServerSmokeOutcome? = null,
+    val grokAcpSmoke: GrokAcpSmokeOutcome? = null,
     val gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
 )
 
@@ -51,6 +55,60 @@ enum class AppServerSmokeOutcome {
     INITIALIZE_OR_ACCOUNT_FAILED,
 }
 
+/** Content-free result of the fixed official Grok version and ACP initialize probe. */
+enum class GrokAcpSmokeOutcome {
+    READY,
+    STAGING_FAILED,
+    POLICY_FAILED,
+    VERSION_FAILED,
+    PROCESS_FAILED,
+    INITIALIZE_FAILED,
+    LIFECYCLE_FAILED,
+    ACCOUNT_FAILED,
+    OUTPUT_INVALID,
+}
+
+internal object GrokAcpSmokeParser {
+    fun parse(
+        exitCode: Int,
+        timedOut: Boolean,
+        standardOutput: ByteArray,
+        standardError: ByteArray,
+    ): GrokAcpSmokeOutcome {
+        if (timedOut || standardError.isNotEmpty() || standardOutput.size > MAX_OUTPUT_BYTES) {
+            return GrokAcpSmokeOutcome.OUTPUT_INVALID
+        }
+        val marker = runCatching {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(standardOutput))
+                .toString()
+                .removeSuffix("\n")
+                .removeSuffix("\r")
+        }.getOrNull() ?: return GrokAcpSmokeOutcome.OUTPUT_INVALID
+        val outcome = when (marker) {
+            "GROK_SMOKE_READY" -> GrokAcpSmokeOutcome.READY
+            "GROK_SMOKE_FAILED_POLICY" -> GrokAcpSmokeOutcome.POLICY_FAILED
+            "GROK_SMOKE_FAILED_VERSION" -> GrokAcpSmokeOutcome.VERSION_FAILED
+            "GROK_SMOKE_FAILED_PROCESS" -> GrokAcpSmokeOutcome.PROCESS_FAILED
+            "GROK_SMOKE_FAILED_INITIALIZE" -> GrokAcpSmokeOutcome.INITIALIZE_FAILED
+            "GROK_SMOKE_FAILED_LIFECYCLE" -> GrokAcpSmokeOutcome.LIFECYCLE_FAILED
+            "GROK_SMOKE_FAILED_ACCOUNT" -> GrokAcpSmokeOutcome.ACCOUNT_FAILED
+            else -> GrokAcpSmokeOutcome.OUTPUT_INVALID
+        }
+        return when {
+            outcome == GrokAcpSmokeOutcome.READY && exitCode == 0 -> outcome
+            outcome != GrokAcpSmokeOutcome.READY &&
+                outcome != GrokAcpSmokeOutcome.OUTPUT_INVALID &&
+                exitCode != 0 -> outcome
+            else -> GrokAcpSmokeOutcome.OUTPUT_INVALID
+        }
+    }
+
+    private const val MAX_OUTPUT_BYTES = 64
+}
+
 class RuntimeViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as AlpineCodexApplication
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -66,6 +124,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                     gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                     codexCliBootstrap = current.codexCliBootstrap,
                     appServerSmoke = current.appServerSmoke,
+                    grokAcpSmoke = current.grokAcpSmoke,
                     gatewayLifecycle = current.gatewayLifecycle,
                 )
             }
@@ -182,6 +241,59 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Runs only the pinned, credential-free Grok version and ACP initialize smoke. */
+    fun runGrokAcpSmoke() {
+        if (_state.value.busy || !_state.value.sessionActive) return
+        _state.update { it.copy(grokAcpSmoke = null) }
+        runOperation(
+            pendingStatus = "GROK_ACP_SMOKE_STARTING",
+            successStatus = "GROK_ACP_SMOKE_READY",
+        ) {
+            try {
+                app.stageGrokCli()
+                app.stageGrokProfile()
+            } catch (_: GrokCliArtifactException) {
+                setGrokAcpSmoke(GrokAcpSmokeOutcome.STAGING_FAILED)
+                return@runOperation failedStage<Unit>(
+                    RuntimeOperationException(RuntimeErrorCode.ARTIFACT_INTEGRITY_FAILED),
+                )
+            }
+            val gateway = try {
+                app.stageGrokGateway()
+            } catch (_: CodexGatewayArtifactException) {
+                setGrokAcpSmoke(GrokAcpSmokeOutcome.STAGING_FAILED)
+                return@runOperation failedStage<Unit>(
+                    RuntimeOperationException(RuntimeErrorCode.ARTIFACT_INTEGRITY_FAILED),
+                )
+            }
+            app.runtimeController.execute(
+                RuntimeCommandRequest(
+                    executable = "/usr/bin/python3",
+                    arguments = listOf("-m", "codex_gateway.grok_acp.smoke"),
+                    workingDirectory = gateway.guestPackageDirectory.substringBeforeLast("/codex_gateway"),
+                    environment = mapOf(
+                        "PYTHONPATH" to gateway.guestPackageDirectory.substringBeforeLast("/codex_gateway"),
+                        "PYTHONDONTWRITEBYTECODE" to "1",
+                    ),
+                    timeoutMillis = GROK_ACP_SMOKE_TIMEOUT_MILLIS,
+                ),
+            ).thenCompose { result ->
+                val outcome = GrokAcpSmokeParser.parse(
+                    exitCode = result.exitCode,
+                    timedOut = result.timedOut,
+                    standardOutput = result.standardOutput,
+                    standardError = result.standardError,
+                )
+                setGrokAcpSmoke(outcome)
+                if (outcome == GrokAcpSmokeOutcome.READY) {
+                    CompletableFuture.completedFuture(Unit)
+                } else {
+                    failedStage(RuntimeOperationException(RuntimeErrorCode.COMMAND_FAILED))
+                }
+            }
+        }
+    }
+
     /**
      * User-initiated, fixed gateway bootstrap and smoke checks. Only exact `apk add` argv for
      * `python3` may run; arbitrary package or terminal input is never accepted. A fresh Alpine
@@ -218,6 +330,10 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         _state.update { it.copy(appServerSmoke = outcome) }
     }
 
+    private fun setGrokAcpSmoke(outcome: GrokAcpSmokeOutcome) {
+        _state.update { it.copy(grokAcpSmoke = outcome) }
+    }
+
     private fun runOperation(
         pendingStatus: String,
         successStatus: String = "RUNTIME_OPERATION_COMPLETED",
@@ -242,6 +358,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                             codexCliBootstrap = current.codexCliBootstrap,
                             appServerSmoke = current.appServerSmoke,
+                            grokAcpSmoke = current.grokAcpSmoke,
                             gatewayLifecycle = current.gatewayLifecycle,
                         )
                     },
@@ -253,6 +370,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             gatewayPythonBootstrap = current.gatewayPythonBootstrap,
                             codexCliBootstrap = current.codexCliBootstrap,
                             appServerSmoke = current.appServerSmoke,
+                            grokAcpSmoke = current.grokAcpSmoke,
                             gatewayLifecycle = current.gatewayLifecycle,
                         )
                     },
@@ -274,6 +392,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         gatewayPythonBootstrap: GatewayPythonBootstrapOutcome? = null,
         codexCliBootstrap: CodexCliBootstrapOutcome? = null,
         appServerSmoke: AppServerSmokeOutcome? = null,
+        grokAcpSmoke: GrokAcpSmokeOutcome? = null,
         gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
     ) = RuntimeUiState(
         lifecycle = runtimeState.lifecycle,
@@ -285,6 +404,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         gatewayPythonBootstrap = gatewayPythonBootstrap,
         codexCliBootstrap = codexCliBootstrap,
         appServerSmoke = appServerSmoke,
+        grokAcpSmoke = grokAcpSmoke,
         gatewayLifecycle = gatewayLifecycle,
     )
 
@@ -300,5 +420,6 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
     private companion object {
         const val CODEX_CLI_VERSION_TIMEOUT_MILLIS = 30_000L
         const val APP_SERVER_SMOKE_TIMEOUT_MILLIS = 60_000L
+        const val GROK_ACP_SMOKE_TIMEOUT_MILLIS = 60_000L
     }
 }

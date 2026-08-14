@@ -11,7 +11,8 @@ Neither tree is used as a fallback for the other.
 The Android app creates and canonicalizes the root, home, staging, profile, work, and Gateway
 directories. Existing symlink components or any path outside the app-private workspace fail before
 process launch. Directories and the executable are mode `0700`; the profile and newly probed state
-files are mode `0600`. The child applies `umask 077` before `exec`.
+files are mode `0600`. The production Gateway fixes process-wide `umask 077` before creating request
+threads, so every subsequently spawned CLI inherits the private mask without a fork-time callback.
 
 ## Fixed process contract
 
@@ -31,6 +32,33 @@ The child environment is built from an empty mapping. It contains only the dedic
 Device Flow selection, the official key-auth kill switch, updater/subagent kill switches, and three
 telemetry-disable switches. Ambient `PATH`, proxy, logging, plugin, leader, secret, token, and custom
 endpoint values are not inherited.
+
+Production Grok activation can originate in a `ThreadingHTTPServer` request worker. The supervisor
+passes the fixed working directory and `close_fds=True`, selecting CPython's native fork/exec
+implementation while closing unrelated Gateway and PRoot descriptors. No Python callback runs in the
+child. A per-child umask argument is also prohibited; the Gateway's process-wide `077` mask is fixed
+before request threads start and is inherited by the CLI.
+
+PRoot real-device validation also showed that a Grok child launched directly by a short-lived HTTP
+worker is lost when that worker returns, although the same supervisor is stable from a standalone
+main thread. Production construction therefore starts one private, daemonized spawn-owner thread
+before the Gateway begins serving requests. Fixed launch work is handed to that owner synchronously,
+and the owner remains alive across Agent selections; it does not add another backend process or widen
+the command/environment surface.
+
+Pinned Grok CLI 1.0.0 can acknowledge ACP `initialize` before its extension handlers are ready. The
+supervisor therefore requires a bounded 0.5-second no-exit interval and then completes one ordered
+`_x.ai/auth/info` request before publishing `READY`. The response is shape-checked and discarded; no
+account field is retained. This barrier prevents the first HTTP account request from racing the CLI's
+post-initialize transition.
+
+Device authentication is also asynchronous inside the official CLI. One `authenticate(grok.com)`
+request is started per user action; `_x.ai/auth/get_url` alone may be polled for at most 15 seconds
+while it returns the exact not-ready shape (`auth_url=null`, mode absent/device). A complete URL may
+use only the exact production OAuth/account hosts `auth.x.ai` or `accounts.x.ai`; suffix lookalikes
+and subdomains are rejected. A malformed mode, non-HTTPS URL, unapproved host, credentials in
+authority, fragment, oversized value, ACP failure, or deadline expiry fails closed and cancels that
+exact authentication sequence.
 
 ## Chat-only profile
 

@@ -16,6 +16,13 @@ Android -> authenticated loopback HTTP/SSE -> Agent Gateway
         -> typed Grok adapter -> bounded JSONL -> official Grok CLI ACP
 ```
 
+The pinned official CLI uses `agent-client-protocol` `0.10.4`. Its extension transport writes one
+leading underscore on JSON-RPC (`_x.ai/...`) and strips it before Grok's logical `x.ai/...` handler.
+The private Python request enum therefore stores exact wire names for auth and model extensions;
+standard ACP methods such as `initialize`, `authenticate`, and `session/*` remain unprefixed. The
+same rule applies to Grok extension notifications. Android and HTTP values still cannot select a
+raw method.
+
 The normalized HTTP handler cannot be constructed without an injected request authorizer. Phase 8
 connected the production session-capability/HMAC verifier to every Codex and Grok route; the Phase 5
 fake lifecycle retains an explicit test authorizer. There is no unsigned default or compatibility
@@ -51,9 +58,12 @@ Codex stream.
 ## Device OAuth state machine
 
 `authenticate(grok.com)` starts in a dedicated thread with a monotonically increasing
-`request_seq`. `x.ai/auth/get_url` runs after the attempt has started and waits in parallel for the
-official CLI to publish its challenge. Only `mode=device` and a complete HTTPS URL on the fixed xAI
-host allowlist are returned. The adapter does not inspect a user code and stores neither the URL nor
+`request_seq`. Logical `x.ai/auth/get_url` (wire `_x.ai/auth/get_url`) runs after the attempt has
+started and waits in parallel for the
+official CLI to publish its challenge. Only `mode=device` and a complete HTTPS URL on the exact
+`auth.x.ai`/`accounts.x.ai` allowlist are returned. `auth.x.ai` owns OAuth issuance while the
+production account UI uses `accounts.x.ai`; subdomains and suffix lookalikes remain rejected. The
+adapter does not inspect a user code and stores neither the URL nor
 any challenge after the start response.
 
 ```text
@@ -70,7 +80,7 @@ discarded.
 
 ## Model and session rules
 
-- `x.ai/models/list` is the sole post-login model source.
+- Logical `x.ai/models/list` (wire `_x.ai/models/list`) is the sole post-login model source.
 - Zero, one, or many model rows are valid; malformed rows fail closed and duplicates keep the first
   official row.
 - Removed models disappear on the next refresh. No hardcoded fallback is synthesized.

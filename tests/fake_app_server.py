@@ -196,6 +196,9 @@ def handle(message):
     if method == "initialized" and request_id is None:
         return True
     if method == "account/read":
+        if MODE == "initialize_probe_error":
+            emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": "probe_rejected"}})
+            return False
         emit(response(request_id, gateway_account()))
         return True
     if method == "account/login/start":

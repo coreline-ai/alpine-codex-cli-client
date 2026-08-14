@@ -103,6 +103,13 @@ class AppServerSupervisorTest(unittest.TestCase):
         self.assertEqual("codex_initialize_failed", error.exception.code)
         self.supervisor.stop()
 
+        self.supervisor = make_supervisor("initialize_probe_error")
+        with self.assertRaises(SupervisorError) as error:
+            self.supervisor.start("client", "test", timeout_seconds=0.5)
+        self.assertEqual("codex_initialize_failed", error.exception.code)
+        self.assertEqual(SupervisorState.FAILED, self.supervisor.state)
+        self.supervisor.stop()
+
         for mode in ("unknown_id", "duplicate_id"):
             self.supervisor = make_supervisor(mode)
             with self.assertRaises(SupervisorError):

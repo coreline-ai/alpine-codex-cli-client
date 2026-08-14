@@ -3,12 +3,13 @@
 import os
 import subprocess
 import threading
+import time
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .jsonl import JsonlDecoder, JsonlProtocolError
 from .redaction import RedactingRingBuffer
-from .rpc import JsonRpcMultiplexer, RpcError, RpcProcessLost, RpcProtocolError, RpcStopped
+from .rpc import JsonRpcMultiplexer, RpcError, RpcProcessLost, RpcProtocolError, RpcStopped, RpcTimeout
 
 
 class SupervisorState(str, Enum):
@@ -88,6 +89,9 @@ class AppServerSupervisor:
     def start(self, client_name: str, client_version: str, timeout_seconds: float = 15.0) -> Dict[str, Any]:
         if not client_name or not client_version:
             raise ValueError("client name and version are required")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        deadline = time.monotonic() + timeout_seconds
         with self._lock:
             if self._state is not SupervisorState.STOPPED:
                 raise SupervisorError("supervisor_not_stopped")
@@ -130,12 +134,16 @@ class AppServerSupervisor:
                         "optOutNotificationMethods": [],
                     },
                 },
-                timeout_seconds,
+                self._remaining_timeout(deadline),
             )
             self._validate_initialize_response(response)
             # The pinned app-server contract declares this post-initialize client notification.
             # It has no parameters and carries no capability, credential, or account material.
             self._write_stdin(b'{"jsonrpc":"2.0","method":"initialized"}\n')
+            # Readiness is published only after an ordered post-initialize request completes.
+            # This acts as a protocol barrier: a duplicate/unknown initialize response or child
+            # exit already queued on stdout must fail the generation before start() can return.
+            self._require_rpc().request("account/read", {}, self._remaining_timeout(deadline))
         except RpcError as error:
             self._fail(error)
             raise SupervisorError("codex_initialize_failed") from error
@@ -298,6 +306,13 @@ class AppServerSupervisor:
         required = ("codexHome", "platformFamily", "platformOs", "userAgent")
         if any(not isinstance(response.get(field), str) or not response[field] for field in required):
             raise ValueError("initialize response is incomplete")
+
+    @staticmethod
+    def _remaining_timeout(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RpcTimeout()
+        return remaining
 
 
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

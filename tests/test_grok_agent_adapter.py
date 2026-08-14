@@ -4,6 +4,7 @@ from dataclasses import replace
 import threading
 import time
 import unittest
+from unittest import mock
 
 from codex_gateway.agents.contracts import AgentConversationBinding, AgentId
 from codex_gateway.agents.grok import (
@@ -58,8 +59,10 @@ class FakeGrokSupervisor:
         self.initialize_state = None
         self.authenticated = False
         self.auth_info_payload = {}
-        self.auth_url = "https://auth.x.ai/device?challenge=fixture"
+        self.auth_url = "https://accounts.x.ai/device?challenge=fixture"
         self.auth_mode = "device"
+        self.auth_url_unready_calls = 0
+        self.auth_url_timeouts = []
         self.model_response = model_state()
         self.authenticate_calls = []
         self.cancel_auth_calls = []
@@ -105,10 +108,14 @@ class FakeGrokSupervisor:
         self.authenticated = True
         return {"account": "discard-me"}
 
-    def get_auth_url(self):
+    def get_auth_url(self, timeout_seconds=None):
         self.call_order.append("get_url")
+        self.auth_url_timeouts.append(timeout_seconds)
         if not self.authenticate_entered.wait(1.0):
             raise RuntimeError("authenticate not started")
+        if self.auth_url_unready_calls > 0:
+            self.auth_url_unready_calls -= 1
+            return {"auth_url": None, "mode": None}
         return {
             "auth_url": self.auth_url,
             "mode": self.auth_mode,
@@ -214,6 +221,46 @@ class GrokLoginTest(unittest.TestCase):
         self.assertEqual("authenticated", self.adapter.login_status(login.request_id).state)
         self.assertEqual([1], self.supervisor.authenticate_calls)
 
+    def test_auth_issuer_host_remains_an_exact_allowed_fallback(self):
+        self.supervisor.auth_url = "https://auth.x.ai/device?challenge=fixture"
+        self.supervisor.authenticate_release.clear()
+
+        login = self.adapter.start_device_login()
+
+        self.assertEqual(self.supervisor.auth_url, login.verification_url)
+
+    def test_auth_url_not_ready_is_polled_without_duplicate_authenticate(self):
+        self.supervisor.authenticate_release.clear()
+        self.supervisor.auth_url_unready_calls = 2
+
+        login = self.adapter.start_device_login()
+
+        self.assertEqual("pending", login.state)
+        self.assertEqual(self.supervisor.auth_url, login.verification_url)
+        self.assertEqual([1], self.supervisor.authenticate_calls)
+        self.assertEqual(["authenticate", "get_url", "get_url", "get_url"], self.supervisor.call_order)
+        self.assertEqual(3, len(self.supervisor.auth_url_timeouts))
+        self.assertTrue(
+            all(
+                timeout is not None and 0 < timeout <= 15.0
+                for timeout in self.supervisor.auth_url_timeouts
+            )
+        )
+
+    def test_auth_url_not_ready_timeout_cancels_exact_auth_sequence(self):
+        self.supervisor.authenticate_release.clear()
+        self.supervisor.auth_url_unready_calls = 10
+        with (
+            mock.patch("codex_gateway.agents.grok.GROK_AUTH_URL_READY_TIMEOUT_SECONDS", 0.01),
+            mock.patch("codex_gateway.agents.grok.GROK_AUTH_URL_POLL_SECONDS", 0.005),
+        ):
+            with self.assertRaises(GrokAdapterError) as error:
+                self.adapter.start_device_login()
+
+        self.assertEqual("grok_login_challenge_invalid", error.exception.code)
+        self.assertEqual([1], self.supervisor.authenticate_calls)
+        self.assertEqual([1], self.supervisor.cancel_auth_calls)
+
     def test_duplicate_click_single_flight_cancel_and_late_success_stays_cancelled(self):
         self.supervisor.authenticate_release.clear()
         self.supervisor.authenticate_ignores_cancel = True
@@ -237,7 +284,8 @@ class GrokLoginTest(unittest.TestCase):
         invalid = (
             "http://auth.x.ai/device?challenge=x",
             "https://evil.invalid/device?challenge=x",
-            "https://accounts.x.ai/device?challenge=x",
+            "https://accounts.x.ai.evil.invalid/device?challenge=x",
+            "https://login.accounts.x.ai/device?challenge=x",
             "https://user@auth.x.ai/device?challenge=x",
             "https://auth.x.ai:444/device?challenge=x",
             "https://auth.x.ai/device?challenge=x#fragment",
@@ -411,9 +459,9 @@ class GrokStreamPolicyTest(unittest.TestCase):
             "promptId": "prompt-1",
             "stopReason": "end_turn",
         }
-        self.supervisor.emit("x.ai/session/prompt_complete", terminal)
+        self.supervisor.emit("_x.ai/session/prompt_complete", terminal)
         self.supervisor.emit("session/update", agent_chunk("late"))
-        self.supervisor.emit("x.ai/session/prompt_complete", terminal)
+        self.supervisor.emit("_x.ai/session/prompt_complete", terminal)
         release.set()
 
         events = list(self.adapter.stream(handle))
@@ -501,7 +549,7 @@ class GrokStreamPolicyTest(unittest.TestCase):
         handle, release = self.blocking_turn()
         private_reason = "private upstream detail"
         self.supervisor.emit(
-            "x.ai/session_notification",
+            "_x.ai/session_notification",
             retry_state(
                 {
                     "type": "retrying",
@@ -600,7 +648,7 @@ class GrokStreamPolicyTest(unittest.TestCase):
                 handle, release = self.blocking_turn(adapter, supervisor)
                 if partial:
                     supervisor.emit("session/update", agent_chunk("partial"))
-                supervisor.emit("x.ai/session_notification", retry_state(update))
+                supervisor.emit("_x.ai/session_notification", retry_state(update))
                 release.set()
                 events = list(adapter.stream(handle))
                 self.assertEqual(expected_code, events[-1].code)
@@ -612,7 +660,7 @@ class GrokStreamPolicyTest(unittest.TestCase):
     def test_malformed_retry_process_loss_and_prompt_timeout_never_replay(self):
         handle, release = self.blocking_turn()
         self.supervisor.emit(
-            "x.ai/session_notification",
+            "_x.ai/session_notification",
             retry_state({"type": "retrying", "attempt": 1, "maxRetries": 3, "reason": "wrong key"}),
         )
         release.set()

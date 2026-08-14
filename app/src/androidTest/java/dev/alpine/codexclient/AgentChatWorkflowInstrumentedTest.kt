@@ -182,6 +182,7 @@ class AgentChatWorkflowInstrumentedTest {
         val storedBytes = File(application.filesDir, STORE_FILE_V2).readBytes().toString(Charsets.UTF_8)
         assertFalse(storedBytes.contains("CODEX-FIXTURE"))
         assertFalse(storedBytes.contains("auth.x.ai"))
+        assertFalse(storedBytes.contains("accounts.x.ai"))
     }
 
     @Test
@@ -476,7 +477,7 @@ class AgentChatWorkflowInstrumentedTest {
                 verificationUrl = if (agentId == AgentId.CODEX) {
                     "https://auth.openai.com/device"
                 } else {
-                    "https://auth.x.ai/device?challenge=fixture"
+                    "https://accounts.x.ai/device?challenge=fixture"
                 },
                 userCode = "CODEX-FIXTURE".takeIf {
                     agentId == AgentId.CODEX && !omitNextCodexCode

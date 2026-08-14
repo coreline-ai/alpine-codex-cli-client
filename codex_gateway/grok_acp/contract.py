@@ -23,11 +23,13 @@ class _RequestMethod(str, Enum):
 
     INITIALIZE = "initialize"
     AUTHENTICATE = "authenticate"
-    AUTH_URL = "x.ai/auth/get_url"
-    AUTH_CANCEL = "x.ai/auth/cancel"
-    AUTH_INFO = "x.ai/auth/info"
-    AUTH_LOGOUT = "x.ai/auth/logout"
-    MODELS_LIST = "x.ai/models/list"
+    # ACP 0.10.4 prefixes extension names with one underscore on the JSON-RPC
+    # wire, then strips it before invoking Grok's logical x.ai/* handler.
+    AUTH_URL = "_x.ai/auth/get_url"
+    AUTH_CANCEL = "_x.ai/auth/cancel"
+    AUTH_INFO = "_x.ai/auth/info"
+    AUTH_LOGOUT = "_x.ai/auth/logout"
+    MODELS_LIST = "_x.ai/models/list"
     SESSION_NEW = "session/new"
     SESSION_LOAD = "session/load"
     SESSION_RESUME = "session/resume"
@@ -42,11 +44,11 @@ NOTIFICATION_METHODS = frozenset(
     {
         "session/update",
         "_x.ai/session/update",
-        "x.ai/session_notification",
-        "x.ai/session/prompt_complete",
+        "_x.ai/session_notification",
+        "_x.ai/session/prompt_complete",
     }
 )
-TERMINAL_NOTIFICATION_METHOD = "x.ai/session/prompt_complete"
+TERMINAL_NOTIFICATION_METHOD = "_x.ai/session/prompt_complete"
 
 
 @dataclass(frozen=True)

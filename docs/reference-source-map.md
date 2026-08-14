@@ -111,7 +111,7 @@ the wire and race behavior narrowed by the project-owned typed adapter and fake 
 | Official source path | SHA-256 | Working tree | Reviewed contract |
 |---|---|---|---|
 | `crates/codegen/xai-grok-shell/src/auth/device_code.rs` | `d6bf74ae624064b2df38102729332402a6a924705326de4fe458d0d4b1037c6b` | clean | complete Device URL is sent before detached browser launch; code embedding remains CLI-owned |
-| `crates/codegen/xai-grok-shell/src/auth/config.rs` | `11ad3d9667c9ec69e025d99b042bd0f4d5ff495b27f50d18a21623e0a463dfc4` | clean | fixed production issuer `https://auth.x.ai` used as the Android URL host allowlist |
+| `crates/codegen/xai-grok-shell/src/auth/config.rs` | `11ad3d9667c9ec69e025d99b042bd0f4d5ff495b27f50d18a21623e0a463dfc4` | clean | fixed production issuer `https://auth.x.ai` and accounts-app origin `https://accounts.x.ai`; both exact hosts form the Android URL allowlist |
 | `crates/codegen/xai-grok-shell/src/auth/single_flight.rs` | `44846af314b65c7a13132f3d2f2d21f3bc10468063d6b69e5969dda422064304` | clean | sequence-scoped cancellation and stale finisher behavior |
 | `crates/codegen/xai-grok-shell/src/agent/mvp_agent/mod.rs` | `95860fa6046a3724c7791de65956f0be7aca8582c567d961da70f2a92118f840` | clean | authenticate `_meta.request_seq`; omitting `use_oauth` preserves configured Device transport |
 | `crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs` | `1235616b00d9ea96dcd74c5019e3430db8b64bb180cea0b1e1eb9713f0e5a001` | clean | authenticate single-flight and session request handling |
@@ -131,6 +131,19 @@ define the project-owned content-free profile audit and prompt-before-write gate
 | `crates/codegen/xai-grok-pager/src/app/subagent.rs` | `d3f91b29dae3188c7713feedc75a5cc892ce7dc9188a8627ddd12eb8fc75dcef` | clean | `subagent_*` and child-session tool event shapes |
 | `crates/codegen/xai-grok-mcp/src/wire.rs` | `bd8ad0cce53d1a524dc605db13c449ffdc35d1a99d2fd3a29d18cfe7f99193f5` | clean | `x.ai/mcp/*` request and reverse-request method names |
 | `crates/codegen/xai-grok-shell/src/tools/notification_bridge.rs` | `a6cf2fdad651411c89b1df9b94ced5a7eedf9a2a2f347725af69e39687f8872f` | clean | tool, terminal, task, and notification update bridge |
+
+### Phase 9 reviewed official ACP transport dependency
+
+The Samsung `ACCOUNT_FAILED` diagnosis required checking the transport below Grok's logical
+extension handlers. The exact crates.io artifact locked by upstream `Cargo.lock` was downloaded to
+an ephemeral review directory and its package checksum was verified before reading. No dependency
+source was copied into this project.
+
+| Official source | Version / identity | SHA-256 | Reviewed contract |
+|---|---|---|---|
+| `https://static.crates.io/crates/agent-client-protocol/agent-client-protocol-0.10.4.crate` | `agent-client-protocol 0.10.4`; upstream lock checksum | `10eeef5e80864f9c3c148a3f395c3e35a66d37ec7561c7845b2bffae8e841759` | exact published dependency artifact |
+| crate `src/lib.rs` | extracted from the checksum-verified crate | `c0fed4a1d911b10b715cde480ceb1b37ea4621f02690e7e20cc65ca85c6dfd5b` | outbound extension adds one `_`; inbound strips one `_` before `ExtRequest` dispatch |
+| crate `src/rpc.rs` | extracted from the checksum-verified crate | `9497a18a86fe46e2074ce0bb59b9e669e3f477e1c24c17cd56319a504d904e78` | typed request ID and JSON-RPC transport ownership |
 
 ## Verification
 
