@@ -12,6 +12,11 @@
 | 작업 트리 | dirty; 아래 수정 파일은 Phase 1 이식 전에 별도 review 필요 |
 | 신규 저장소 | `/Volumes/ExternalSSD/projects_8/alpine-codex-cli-client` |
 
+검증 스크립트는 live working tree를 신뢰하지 않고 위 Git HEAD의 immutable blob을 읽는다.
+현재 checkout 위치는 `ALPINE_REFERENCE_REPO`로 덮어쓸 수 있으며, 기본값은 프로젝트 루트
+기준 `../../project_202607/alpine-llm-gateway`다. 기준 commit 변경은
+`ALPINE_REFERENCE_COMMIT`과 이 문서의 hash를 함께 별도 검토한 경우에만 허용한다.
+
 이 문서는 허용된 참조 범위만 기록한다. `android/`, `alpine-chat-provider-android`,
 `alpine-chat-backend-direct`, `CodexOAuthContract`, OAuth registration, CLI fingerprint,
 credential 및 Provider direct adapter는 이식 금지다.
@@ -51,6 +56,10 @@ Phase 1의 허용 파일 목록과 source/destination hash는
 이식 후에는 `scripts/verify-runtime-reference-manifest.sh`가 source와 destination hash를 모두 검증한다.
 
 ## Dirty UI snapshot — import requires explicit review
+
+이 표는 당시 dirty working tree를 검토한 역사적 증거이며 네 파일 모두 `not imported`다.
+따라서 현재 참조 checkout과의 live hash gate에는 포함하지 않는다. 실제 이식 무결성은 위의 clean
+configuration allowlist와 `reference-runtime-files.tsv`/runtime manifest가 검증한다.
 
 | Reference path | Planned destination | SHA-256 | 상태 |
 |---|---|---|---|

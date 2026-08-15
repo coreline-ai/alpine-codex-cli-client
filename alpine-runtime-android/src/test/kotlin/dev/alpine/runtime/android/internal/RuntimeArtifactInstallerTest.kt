@@ -21,6 +21,7 @@ import java.io.InputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Properties
 import java.util.concurrent.CancellationException
 import java.util.zip.GZIPOutputStream
 
@@ -195,6 +196,120 @@ class RuntimeArtifactInstallerTest {
         recovered.recoverInterruptedActivation()
         assertEquals("v2", recovered.inspect().runtimeVersion)
         assertEquals("shell-v2", fixture.rootfsShell().readText())
+        assertEquals("v1", fixture.previousRuntimeVersion())
+        assertEquals("shell-v1", fixture.previousRootfsShell().readText())
+    }
+
+    @Test
+    fun `successful upgrade retains immediate previous generation`() {
+        val fixture = fixture()
+        val installer = fixture.installer()
+
+        installer.install(fixture.bundle("v1", "shell-v1"), ABIS, false) { false }
+        installer.install(fixture.bundle("v2", "shell-v2"), ABIS, true) { false }
+
+        assertEquals("v2", installer.inspect().runtimeVersion)
+        assertEquals("shell-v2", fixture.rootfsShell().readText())
+        assertEquals("v1", fixture.previousRuntimeVersion())
+        assertEquals("shell-v1", fixture.previousRootfsShell().readText())
+
+        installer.install(fixture.bundle("v3", "shell-v3"), ABIS, true) { false }
+
+        assertEquals("v3", installer.inspect().runtimeVersion)
+        assertEquals("shell-v3", fixture.rootfsShell().readText())
+        assertEquals("v2", fixture.previousRuntimeVersion())
+        assertEquals("shell-v2", fixture.previousRootfsShell().readText())
+    }
+
+    @Test
+    fun `explicit rollback swaps generations without touching workspace or sensitive siblings`() {
+        val fixture = fixture()
+        val installer = fixture.installer()
+        val workspaceFile = File(fixture.workspaceDirectory, "user.txt").apply {
+            requireNotNull(parentFile).mkdirs()
+            writeText("workspace")
+        }
+        val credentialFile = fixture.sensitiveSibling("credentials/codex.json", "credential")
+        val sessionFile = fixture.sensitiveSibling("sessions/conversation.bin", "session")
+        installer.install(fixture.bundle("v1", "shell-v1"), ABIS, false) { false }
+        installer.install(fixture.bundle("v2", "shell-v2"), ABIS, true) { false }
+
+        assertTrue(installer.rollbackToPrevious())
+
+        assertEquals("v1", installer.inspect().runtimeVersion)
+        assertEquals("shell-v1", fixture.rootfsShell().readText())
+        assertEquals("v2", fixture.previousRuntimeVersion())
+        assertEquals("shell-v2", fixture.previousRootfsShell().readText())
+        assertEquals("workspace", workspaceFile.readText())
+        assertEquals("credential", credentialFile.readText())
+        assertEquals("session", sessionFile.readText())
+    }
+
+    @Test
+    fun `interrupted rollback before marker activation restores original generation`() {
+        val fixture = fixture()
+        fixture.installer().install(fixture.bundle("v1", "shell-v1"), ABIS, false) { false }
+        fixture.installer().install(fixture.bundle("v2", "shell-v2"), ABIS, true) { false }
+        val interrupted = fixture.installer(
+            faultInjector = RuntimeInstallFaultInjector { checkpoint ->
+                if (checkpoint == RuntimeInstallCheckpoint.AFTER_ROOTFS_ACTIVATION) {
+                    throw SimulatedProcessDeath()
+                }
+            },
+        )
+
+        assertThrows(SimulatedProcessDeath::class.java) {
+            interrupted.rollbackToPrevious()
+        }
+
+        val recovered = fixture.installer()
+        recovered.recoverInterruptedActivation()
+        assertEquals("v2", recovered.inspect().runtimeVersion)
+        assertEquals("shell-v2", fixture.rootfsShell().readText())
+        assertEquals("v1", fixture.previousRuntimeVersion())
+        assertEquals("shell-v1", fixture.previousRootfsShell().readText())
+    }
+
+    @Test
+    fun `interrupted rollback after marker activation completes swapped generations`() {
+        val fixture = fixture()
+        fixture.installer().install(fixture.bundle("v1", "shell-v1"), ABIS, false) { false }
+        fixture.installer().install(fixture.bundle("v2", "shell-v2"), ABIS, true) { false }
+        val interrupted = fixture.installer(
+            faultInjector = RuntimeInstallFaultInjector { checkpoint ->
+                if (checkpoint == RuntimeInstallCheckpoint.AFTER_MARKER_ACTIVATION) {
+                    throw SimulatedProcessDeath()
+                }
+            },
+        )
+
+        assertThrows(SimulatedProcessDeath::class.java) {
+            interrupted.rollbackToPrevious()
+        }
+
+        val recovered = fixture.installer()
+        recovered.recoverInterruptedActivation()
+        assertEquals("v1", recovered.inspect().runtimeVersion)
+        assertEquals("shell-v1", fixture.rootfsShell().readText())
+        assertEquals("v2", fixture.previousRuntimeVersion())
+        assertEquals("shell-v2", fixture.previousRootfsShell().readText())
+    }
+
+    @Test
+    fun `rollback rejects incomplete previous generation and preserves active runtime`() {
+        val fixture = fixture()
+        val installer = fixture.installer()
+        installer.install(fixture.bundle("v1", "shell-v1"), ABIS, false) { false }
+        installer.install(fixture.bundle("v2", "shell-v2"), ABIS, true) { false }
+        File(fixture.runtimeDirectory, "runtime.properties.previous").delete()
+
+        val error = assertThrows(RuntimeInstallException::class.java) {
+            installer.rollbackToPrevious()
+        }
+
+        assertEquals(RuntimeErrorCode.HEALTH_CHECK_FAILED, error.errorCode)
+        assertEquals("v2", installer.inspect().runtimeVersion)
+        assertEquals("shell-v2", fixture.rootfsShell().readText())
     }
 
     @Test
@@ -257,6 +372,18 @@ class RuntimeArtifactInstallerTest {
         )
 
         fun rootfsShell(): File = File(runtimeDirectory, "rootfs/bin/sh")
+
+        fun previousRootfsShell(): File = File(runtimeDirectory, "rootfs.previous/bin/sh")
+
+        fun previousRuntimeVersion(): String? = Properties().apply {
+            File(runtimeDirectory, "runtime.properties.previous").inputStream().use(::load)
+        }.getProperty("runtime.version")
+
+        fun sensitiveSibling(path: String, contents: String): File =
+            File(runtimeDirectory.parentFile, "no_backup/$path").apply {
+                requireNotNull(parentFile).mkdirs()
+                writeText(contents)
+            }
 
         fun bundle(
             version: String,

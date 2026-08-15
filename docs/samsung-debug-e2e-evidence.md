@@ -1,6 +1,6 @@
 # Samsung debug E2E evidence (redacted)
 
-Date: 2026-08-12
+Date: 2026-08-15
 
 ## Scope and privacy boundary
 
@@ -20,6 +20,29 @@ Date: 2026-08-12
 | E2E-CLI-01 | Pinned CLI version check returned the closed `CODEX_CLI_READY` state. |
 | app-server smoke | Official CLI `initialize → account/read` returned the closed `APP_SERVER_SMOKE_READY` state. |
 
-## OAuth progress and pending actions
+## Grok post-authentication completion
 
-The official Device Code challenge was started once and its browser approval page was opened. The app's code-copy action and a single browser paste/submit attempt were performed without reading, logging, recording, or retaining the code or URL. After user browser approval, the app-private loopback account check returned only the authenticated boolean. No account identifier or auth payload was read, recorded, or retained. Dynamic model selection, independently observed real chat, Stop, force-stop recovery, logout, and Runtime shutdown remain pending.
+The official Device Code challenge was started once and its browser approval page was opened. The
+app's code-copy action and a single browser paste/submit attempt were performed without reading,
+logging, recording, or retaining the code or URL. After user browser approval, the app-private
+loopback account check returned only the authenticated Boolean. No account identifier or auth
+payload was read, recorded, or retained.
+
+| Check | Result |
+|---|---|
+| OAuth and catalog | Authenticated state and live model readiness restored without automatic re-authentication. |
+| Real chat | One approved synthetic Grok turn completed; content-free audit was dispatch `1`, terminal `1`, cancel `0`, retry `none`, profile `clean`. |
+| Force-stop recovery | Two data-preserving relaunch cycles restored Runtime/Gateway/Grok, conversation history, and composer without a login action or automatic prompt. |
+| Background/foreground | Account/session/history/composer remained available; audit count did not increase and processes remained singular. |
+| Codex -> Grok | Codex readiness was inspected without a paid turn; re-selecting Grok restored its history and composer without automatic chat. |
+| Real Stop | Final approved Stop audit passed with dispatch `1`, terminal `1`, cancel `1`, retry `none`, profile `clean`. |
+| Final cardinality | App/PRoot/Python/Grok/Codex `1/1/1/1/0`. |
+| Credential-free gate | 116 Python tests and 516 Gradle tasks passed with protocol, clean-room, artifact, profile, ACP, secure APK, evidence, reference-source, and Runtime-manifest checks. |
+
+## Remaining separately approved actions
+
+- Official Grok logout is not executed; it requires a separate destructive lifecycle approval.
+- Runtime shutdown and child-process-zero verification are not executed; they require a separate
+  cleanup approval.
+- No uninstall, clear-data, credential-file access, release build, other-device mutation, Git
+  commit, or Git push was performed in this implementation run.

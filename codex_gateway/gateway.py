@@ -1,4 +1,4 @@
-"""Loopback-only HTTP/SSE adapter for the official Codex app-server protocol.
+"""Private-carrier HTTP/SSE adapter for the official Codex app-server protocol.
 
 This module intentionally exposes a very small API surface.  It never accepts credentials,
 does not load provider configuration, and owns exactly one active device login and one active
@@ -9,10 +9,15 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+import http.client
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import secrets
+import socket
+import socketserver
+import stat
+import struct
 import threading
 import time
 from typing import Any, Callable, Deque, Dict, Iterator, Optional, Tuple
@@ -20,11 +25,21 @@ from urllib.parse import urlsplit
 
 from codex_gateway.app_server.process import AppServerSupervisor
 from codex_gateway.app_server.protocol import CodexAppServerProtocol, DeviceCodeLoginStart
+from codex_gateway.security import BoundedSecurityCounters
 
 
 LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
+FIXED_HTTP_HOST = f"{LOOPBACK_HOST}:{DEFAULT_PORT}"
+# Linux sockaddr_un.sun_path is 108 bytes including the trailing NUL.
+MAX_UNIX_SOCKET_PATH_BYTES = 107
 MAX_REQUEST_BYTES = 32 * 1024
+MAX_REQUEST_LINE_BYTES = 4 * 1024
+MAX_REQUEST_HEADER_BYTES = 16 * 1024
+MAX_CONCURRENT_GATEWAY_CONNECTIONS = 8
+GATEWAY_ACCEPT_BACKLOG = 8
+GATEWAY_IO_TIMEOUT_SECONDS = 5.0
+GATEWAY_PRE_AUTH_DEADLINE_SECONDS = 5.0
 MAX_MESSAGE_BYTES = 16 * 1024
 MAX_SSE_EVENT_BYTES = 24 * 1024
 MAX_MODELS = 64
@@ -36,6 +51,123 @@ LOGIN_POLL_INTERVAL_SECONDS = 2
 DEVICE_CODE_ALLOWED_HOSTS = frozenset({"auth.openai.com", "chatgpt.com"})
 MODEL_CACHE_SECONDS = 60.0
 TURN_TIMEOUT_SECONDS = 120.0
+TRANSPORT_SECURITY_COUNTERS = (
+    "peer_rejected",
+    "capacity_rejected",
+    "preauth_timeout",
+    "header_rejected",
+    "auth_rejected",
+)
+
+
+class _HeaderBudgetReader:
+    """Expose only ``readline`` while enforcing one total HTTP header budget."""
+
+    def __init__(self, source, maximum_bytes: int) -> None:
+        self._source = source
+        self._remaining = maximum_bytes
+        self.exceeded = False
+
+    def readline(self, limit: int = -1) -> bytes:
+        allowed = self._remaining + 1
+        if limit >= 0:
+            allowed = min(allowed, limit)
+        value = self._source.readline(allowed)
+        if len(value) > self._remaining:
+            self.exceeded = True
+            raise http.client.LineTooLong("gateway header budget")
+        self._remaining -= len(value)
+        return value
+
+
+class BoundedGatewayRequestHandler(BaseHTTPRequestHandler):
+    """One-request HTTP handler with bounded pre-auth bytes and absolute deadline."""
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(GATEWAY_IO_TIMEOUT_SECONDS)
+        self._preauth_lock = threading.Lock()
+        self._authorization_finished = False
+        self._preauth_timer = threading.Timer(
+            GATEWAY_PRE_AUTH_DEADLINE_SECONDS,
+            self._expire_pre_auth,
+        )
+        self._preauth_timer.daemon = True
+        self._preauth_timer.start()
+
+    def finish(self) -> None:
+        self._cancel_pre_auth_timer()
+        super().finish()
+
+    def handle_one_request(self) -> None:
+        """Parse one request only; reject oversized request lines/aggregate headers."""
+
+        try:
+            self.raw_requestline = self.rfile.readline(MAX_REQUEST_LINE_BYTES + 1)
+            if len(self.raw_requestline) > MAX_REQUEST_LINE_BYTES:
+                self.requestline = ""
+                self.request_version = ""
+                self.command = ""
+                self.close_connection = True
+                self._record_security_event("header_rejected")
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            original = self.rfile
+            bounded = _HeaderBudgetReader(original, MAX_REQUEST_HEADER_BYTES)
+            self.rfile = bounded
+            try:
+                parsed = self.parse_request()
+            finally:
+                self.rfile = original
+            if bounded.exceeded:
+                self._record_security_event("header_rejected")
+            if not parsed:
+                self.close_connection = True
+                return
+            self.close_connection = True
+            method_name = "do_" + self.command
+            if not hasattr(self, method_name):
+                self.send_error(501, "Unsupported method")
+                return
+            getattr(self, method_name)()
+            self.wfile.flush()
+        except (TimeoutError, socket.timeout):
+            self.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def _authorization_complete(self) -> None:
+        with self._preauth_lock:
+            if self._authorization_finished:
+                raise TimeoutError("gateway pre-auth deadline")
+            self._authorization_finished = True
+            self._preauth_timer.cancel()
+
+    def _expire_pre_auth(self) -> None:
+        with self._preauth_lock:
+            if self._authorization_finished:
+                return
+            self._authorization_finished = True
+        self._record_security_event("preauth_timeout")
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _cancel_pre_auth_timer(self) -> None:
+        timer = getattr(self, "_preauth_timer", None)
+        if timer is None:
+            return
+        with self._preauth_lock:
+            self._authorization_finished = True
+            timer.cancel()
+
+    def _record_security_event(self, name: str) -> None:
+        recorder = getattr(self.server, "record_security_event", None)
+        if callable(recorder):
+            recorder(name)
 
 
 class GatewayError(Exception):
@@ -897,21 +1029,184 @@ def make_handler(service: CodexGatewayService):
             self._json(status, {"error": {"code": code}})
 
         def _is_loopback_client(self) -> bool:
-            return self.client_address[0] == LOOPBACK_HOST
+            checker = getattr(self.server, "is_trusted_client", None)
+            return bool(checker and checker(self.request, self.client_address))
 
     return Handler
 
 
 class LoopbackGatewayServer(ThreadingHTTPServer):
-    """A server type that rejects every non-loopback bind request."""
+    """A loopback-only server that can reclaim a closed port after process recreation."""
 
     daemon_threads = True
-    allow_reuse_address = False
+    # SO_REUSEADDR permits a new app-private Gateway to reclaim 127.0.0.1:8787 while connections
+    # from the force-stopped process are still in TIME_WAIT. It does not enable SO_REUSEPORT, so a
+    # second live listener still fails closed with EADDRINUSE.
+    allow_reuse_address = True
 
     def __init__(self, address: Tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
         if address[0] != LOOPBACK_HOST:
             raise ValueError("gateway must bind to loopback")
         super().__init__(address, handler)
+        self.expected_host = f"{LOOPBACK_HOST}:{self.server_address[1]}"
+
+    @staticmethod
+    def is_trusted_client(_request, client_address) -> bool:
+        return bool(client_address and client_address[0] == LOOPBACK_HOST)
+
+
+class PrivateUnixGatewayServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """App-private UDS server with fail-closed Linux peer-UID authentication."""
+
+    daemon_threads = True
+    request_queue_size = GATEWAY_ACCEPT_BACKLOG
+
+    def __init__(
+        self,
+        path: str,
+        handler: type[BaseHTTPRequestHandler],
+        expected_peer_uid: int,
+        peer_uid_reader: Optional[Callable[[socket.socket], int]] = None,
+        max_connections: int = MAX_CONCURRENT_GATEWAY_CONNECTIONS,
+    ) -> None:
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or len(os.fsencode(path)) > MAX_UNIX_SOCKET_PATH_BYTES
+            or expected_peer_uid < 0
+            or not isinstance(max_connections, int)
+            or isinstance(max_connections, bool)
+            or max_connections <= 0
+            or max_connections > MAX_CONCURRENT_GATEWAY_CONNECTIONS
+        ):
+            raise ValueError("invalid private gateway socket")
+        parent = os.path.dirname(path)
+        parent_stat = os.lstat(parent)
+        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_IMODE(parent_stat.st_mode) & 0o077:
+            raise PermissionError("private gateway parent permissions")
+        self._socket_path = path
+        self._expected_peer_uid = expected_peer_uid
+        self._peer_uid_reader = peer_uid_reader or _linux_peer_uid
+        self._connection_slots = threading.BoundedSemaphore(max_connections)
+        self._connection_state_lock = threading.Lock()
+        self._active_connections = 0
+        self._maximum_active_connections = 0
+        self._security_counters = BoundedSecurityCounters(TRANSPORT_SECURITY_COUNTERS)
+        self.expected_host = FIXED_HTTP_HOST
+        self.server_name = "localhost"
+        self.server_port = 0
+        self._remove_stale_socket()
+        try:
+            super().__init__(path, handler)
+            # Record the inode as soon as UnixStreamServer binds it so constructor failures can
+            # unlink only the socket created by this server, never a replacement at the path.
+            created = os.lstat(path)
+            self._bound_identity = (created.st_dev, created.st_ino)
+            # Alpine's Python may not expose chmod(follow_symlinks=False) even though Linux
+            # chmod itself never follows a Unix-socket inode. The private 0700 parent plus the
+            # inode checks before and after chmod keep this portable fallback fail closed.
+            try:
+                os.chmod(path, 0o600, follow_symlinks=False)
+            except (NotImplementedError, TypeError):
+                os.chmod(path, 0o600)
+            bound = os.lstat(path)
+            if not stat.S_ISSOCK(bound.st_mode) or stat.S_IMODE(bound.st_mode) != 0o600:
+                raise PermissionError("private gateway socket permissions")
+            if (bound.st_dev, bound.st_ino) != self._bound_identity:
+                raise PermissionError("private gateway socket replaced")
+        except Exception:
+            self._unlink_owned_socket()
+            raise
+
+    def is_trusted_client(self, request, _client_address) -> bool:
+        try:
+            return self._peer_uid_reader(request) == self._expected_peer_uid
+        except Exception:
+            return False
+
+    def verify_request(self, request, client_address) -> bool:
+        trusted = self.is_trusted_client(request, client_address)
+        if not trusted:
+            self.record_security_event("peer_rejected")
+        return trusted
+
+    def get_request(self):
+        request, address = super().get_request()
+        request.settimeout(GATEWAY_IO_TIMEOUT_SECONDS)
+        return request, address
+
+    def process_request(self, request, client_address) -> None:
+        if not self._connection_slots.acquire(blocking=False):
+            self.record_security_event("capacity_rejected")
+            self.shutdown_request(request)
+            return
+        with self._connection_state_lock:
+            self._active_connections += 1
+            self._maximum_active_connections = max(
+                self._maximum_active_connections,
+                self._active_connections,
+            )
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._release_connection_slot()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release_connection_slot()
+
+    def _release_connection_slot(self) -> None:
+        with self._connection_state_lock:
+            self._active_connections -= 1
+        self._connection_slots.release()
+
+    def record_security_event(self, name: str) -> None:
+        self._security_counters.increment(name)
+
+    def security_snapshot(self) -> Dict[str, int]:
+        snapshot = dict(self._security_counters.snapshot())
+        with self._connection_state_lock:
+            snapshot["active_connections"] = self._active_connections
+            snapshot["max_active_connections"] = self._maximum_active_connections
+        return snapshot
+
+    def server_close(self) -> None:
+        try:
+            super().server_close()
+        finally:
+            self._unlink_owned_socket()
+
+    def _remove_stale_socket(self) -> None:
+        try:
+            current = os.lstat(self._socket_path)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISSOCK(current.st_mode) or current.st_uid != os.getuid():
+            raise PermissionError("unsafe stale gateway socket")
+        os.unlink(self._socket_path)
+
+    def _unlink_owned_socket(self) -> None:
+        identity = getattr(self, "_bound_identity", None)
+        if identity is None:
+            return
+        try:
+            current = os.lstat(self._socket_path)
+        except FileNotFoundError:
+            return
+        if stat.S_ISSOCK(current.st_mode) and (current.st_dev, current.st_ino) == identity:
+            os.unlink(self._socket_path)
+
+
+def _linux_peer_uid(connection: socket.socket) -> int:
+    option = getattr(socket, "SO_PEERCRED", None)
+    if option is None:
+        raise OSError("peer credentials unavailable")
+    value = connection.getsockopt(socket.SOL_SOCKET, option, struct.calcsize("3i"))
+    _pid, uid, _gid = struct.unpack("3i", value)
+    return uid
 
 
 def _json_depth(value: Any) -> int:

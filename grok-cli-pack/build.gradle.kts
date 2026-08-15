@@ -24,10 +24,10 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
-    // The locked executable exists only in generated debug assets. No release source set,
-    // publication, or signing configuration is created by this module.
+    // Every app variant consumes the same checksum-pinned executable and chat-only profile.
+    // The generated binary is never tracked in Git.
     sourceSets {
-        getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets"))
+        getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/distribution/assets"))
     }
 
     androidResources {
@@ -190,13 +190,13 @@ fun copyGrokAtomically(source: File, target: File, expectedSize: Long) {
     }
 }
 
-val generatedAssetsDirectory = layout.buildDirectory.dir("generated/debug/assets/grok-cli")
+val generatedAssetsDirectory = layout.buildDirectory.dir("generated/distribution/assets/grok-cli")
 val lockFile = layout.projectDirectory.file("grok-cli.lock.json")
 val configuredBinary = providers.environmentVariable("GROK_CLI_BINARY_PATH")
 
-val prepareGrokCliDebug by tasks.registering {
+val prepareGrokCliAssets by tasks.registering {
     group = "build setup"
-    description = "Prepares the checksum-pinned official Grok CLI as a debug-only Android asset."
+    description = "Prepares the checksum-pinned official Grok CLI for Android app variants."
     inputs.file(lockFile)
     inputs.property("configuredGrokCliBinary", configuredBinary.orNull ?: "")
     outputs.dir(generatedAssetsDirectory)
@@ -271,8 +271,11 @@ val prepareGrokCliDebug by tasks.registering {
 }
 
 tasks.configureEach {
-    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
-        dependsOn(prepareGrokCliDebug)
+    if (
+        (name.startsWith("merge") && name.endsWith("Assets")) ||
+        name.lowercase().contains("lint")
+    ) {
+        dependsOn(prepareGrokCliAssets)
     }
 }
 

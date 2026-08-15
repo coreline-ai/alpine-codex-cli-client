@@ -16,7 +16,7 @@ android {
     }
 
     sourceSets {
-        getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets"))
+        getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/distribution/assets"))
     }
 
     androidResources {
@@ -48,12 +48,12 @@ fun sha256(file: File): String {
     }
 }
 
-val generatedAssetsDirectory = layout.buildDirectory.dir("generated/debug/assets/codex-gateway")
+val generatedAssetsDirectory = layout.buildDirectory.dir("generated/distribution/assets/codex-gateway")
 val gatewaySourceDirectory = rootProject.layout.projectDirectory.dir("codex_gateway")
 
-val prepareCodexGatewayDebug by tasks.registering {
+val prepareCodexGatewayAssets by tasks.registering {
     group = "build setup"
-    description = "Packages the local app-server supervisor as a debug-only Python asset."
+    description = "Packages the local app-server supervisor for Android app variants."
     inputs.dir(gatewaySourceDirectory)
     outputs.dir(generatedAssetsDirectory)
 
@@ -81,8 +81,11 @@ val prepareCodexGatewayDebug by tasks.registering {
 }
 
 tasks.configureEach {
-    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
-        dependsOn(prepareCodexGatewayDebug)
+    if (
+        (name.startsWith("merge") && name.endsWith("Assets")) ||
+        name.lowercase().contains("lint")
+    ) {
+        dependsOn(prepareCodexGatewayAssets)
     }
 }
 

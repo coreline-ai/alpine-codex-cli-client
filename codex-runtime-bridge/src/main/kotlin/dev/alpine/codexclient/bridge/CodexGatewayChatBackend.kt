@@ -4,7 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
- * The only Android chat dispatch boundary.  It delegates solely to the fixed loopback Codex
+ * The only Android chat dispatch boundary. It delegates solely to the private UDS Codex
  * gateway and intentionally has no provider, endpoint, retry, or prompt-replay alternative.
  */
 class CodexGatewayChatBackend(private val gatewayClient: CodexGatewayClient) {

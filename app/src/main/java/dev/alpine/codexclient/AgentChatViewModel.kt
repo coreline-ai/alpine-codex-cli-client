@@ -2,6 +2,7 @@ package dev.alpine.codexclient
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.alpine.codexclient.bridge.AgentGatewayChatBackend
@@ -117,6 +118,7 @@ class AgentChatViewModel @JvmOverloads constructor(
     val browserLaunches: SharedFlow<BrowserLaunchRequest> = _browserLaunches.asSharedFlow()
 
     private var loginPollJob: Job? = null
+    private var loginStatusInFlight = false
     private var streamJob: Job? = null
     private var activeTurn: AgentGatewayChatTurn? = null
     private var loginStartInFlight = false
@@ -290,8 +292,25 @@ class AgentChatViewModel @JvmOverloads constructor(
 
     fun checkDeviceLoginStatus() {
         val challenge = _state.value.login ?: return
-        if (System.currentTimeMillis() < nextLoginPollAtMillis) return
+        if (loginStatusInFlight || System.currentTimeMillis() < nextLoginPollAtMillis) return
         viewModelScope.launch { checkDeviceLoginStatus(challenge) }
+    }
+
+    /** Reconciles the existing OAuth attempt immediately when the browser returns to the app. */
+    fun onHostResumed() {
+        if (runtimeStateSource.currentState().lifecycle != CodexRuntimeLifecycle.RUNNING) return
+        val before = _state.value
+        val challenge = before.login
+        if (challenge != null) {
+            if (!loginStatusInFlight) viewModelScope.launch { checkDeviceLoginStatus(challenge) }
+        } else if (
+            before.connection in setOf(AgentConnectionState.LOGIN_REQUIRED, AgentConnectionState.STABLE_ERROR) &&
+            !before.operationLocked && !before.refreshing
+        ) {
+            // Also recovers a completed official OAuth session when Android recreated the app and
+            // intentionally did not persist the opaque pending-login handle.
+            refreshConnection()
+        }
     }
 
     fun cancelDeviceLogin() {
@@ -438,7 +457,11 @@ class AgentChatViewModel @JvmOverloads constructor(
         if (!_state.value.isGenerating || turn.agentId != _state.value.selectedAgentId) return
         _state.update { it.copy(stopRequested = true) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { turn.stop() }.onFailure(::setStableError)
+            runCatching { turn.stop() }
+                .onSuccess { dispatched ->
+                    AgentTurnStateAudit.recordStop(turn.agentId, dispatched)
+                }
+                .onFailure(::setStableError)
         }
     }
 
@@ -530,6 +553,7 @@ class AgentChatViewModel @JvmOverloads constructor(
             -> {
                 loginPollJob?.cancel()
                 loginStartInFlight = false
+                loginStatusInFlight = false
                 switchInFlight = false
                 _state.update {
                     it.copy(
@@ -596,41 +620,90 @@ class AgentChatViewModel @JvmOverloads constructor(
     }
 
     private suspend fun checkDeviceLoginStatus(challenge: AgentLoginChallenge) {
+        if (loginStatusInFlight) return
+        loginStatusInFlight = true
         nextLoginPollAtMillis = System.currentTimeMillis() + challenge.pollIntervalSeconds * 1_000L
-        val result = withContext(Dispatchers.IO) {
-            runCatching { gatewayClient.loginStatus(challenge.agentId, challenge.requestId) }
+        try {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { gatewayClient.loginStatus(challenge.agentId, challenge.requestId) }
+            }
+            result.fold(
+                onSuccess = { status ->
+                    if (_state.value.login?.requestId != challenge.requestId) return@fold
+                    if (status.agentId != challenge.agentId || status.requestId != challenge.requestId) {
+                        setStableError(IllegalStateException("login_status_invalid"))
+                        return@fold
+                    }
+                    when (status.state) {
+                        "pending" -> Unit
+                        "authenticated", "completed" -> {
+                            loginPollJob?.cancel()
+                            _state.update {
+                                it.copy(connection = AgentConnectionState.GATEWAY_STARTING, login = null)
+                            }
+                            refreshConnection()
+                        }
+                        "cancelled", "expired", "failed" -> {
+                            loginPollJob?.cancel()
+                            _state.update {
+                                it.copy(
+                                    connection = AgentConnectionState.LOGIN_REQUIRED,
+                                    login = null,
+                                    recoveredPendingLogin = false,
+                                    stableErrorCode = if (status.state == "cancelled") null else "login_${status.state}",
+                                )
+                            }
+                        }
+                        else -> setStableError(IllegalStateException("login_status_invalid"))
+                    }
+                },
+                onFailure = { error -> reconcilePendingLogin(challenge, error) },
+            )
+        } finally {
+            loginStatusInFlight = false
         }
-        result.fold(
-            onSuccess = { status ->
-                if (status.agentId != challenge.agentId || status.requestId != challenge.requestId) {
-                    setStableError(IllegalStateException("login_status_invalid"))
-                    return@fold
-                }
-                when (status.state) {
-                    "pending" -> Unit
-                    "authenticated", "completed" -> {
-                        loginPollJob?.cancel()
-                        _state.update {
-                            it.copy(connection = AgentConnectionState.GATEWAY_STARTING, login = null)
-                        }
-                        refreshConnection()
-                    }
-                    "cancelled", "expired", "failed" -> {
-                        loginPollJob?.cancel()
-                        _state.update {
-                            it.copy(
-                                connection = AgentConnectionState.LOGIN_REQUIRED,
-                                login = null,
-                                recoveredPendingLogin = false,
-                                stableErrorCode = if (status.state == "cancelled") null else "login_${status.state}",
-                            )
-                        }
-                    }
-                    else -> setStableError(IllegalStateException("login_status_invalid"))
-                }
-            },
-            onFailure =(::setStableError),
-        )
+    }
+
+    private suspend fun reconcilePendingLogin(challenge: AgentLoginChallenge, statusError: Throwable) {
+        val account = withContext(Dispatchers.IO) {
+            runCatching { gatewayClient.account(challenge.agentId) }
+        }
+        if (account.getOrNull()?.authenticated == true) {
+            loginPollJob?.cancel()
+            _state.update { current ->
+                if (current.login?.requestId == challenge.requestId) {
+                    current.copy(
+                        connection = AgentConnectionState.GATEWAY_STARTING,
+                        login = null,
+                        recoveredPendingLogin = false,
+                        refreshing = false,
+                        stableErrorCode = null,
+                    )
+                } else current
+            }
+            refreshConnection()
+            return
+        }
+        _state.update { current ->
+            if (current.login?.requestId != challenge.requestId) return@update current
+            if (statusError.isMissingLogin() && account.isSuccess) {
+                current.copy(
+                    connection = AgentConnectionState.LOGIN_REQUIRED,
+                    login = null,
+                    recoveredPendingLogin = false,
+                    refreshing = false,
+                    stableErrorCode = "login_session_lost",
+                )
+            } else {
+                // A transient status/account failure must not discard a browser-completed OAuth
+                // attempt. The existing bounded poll resumes without issuing authenticate again.
+                current.copy(
+                    connection = AgentConnectionState.LOGIN_PENDING,
+                    refreshing = false,
+                    stableErrorCode = null,
+                )
+            }
+        }
     }
 
     private fun handleChatEvent(
@@ -656,6 +729,7 @@ class AgentChatViewModel @JvmOverloads constructor(
         }
         when (event) {
             is AgentTurnEvent.Started -> {
+                AgentTurnStateAudit.recordStarted(event.agentId)
                 _state.update {
                     it.copy(
                         activeRequestId = event.requestId,
@@ -666,7 +740,11 @@ class AgentChatViewModel @JvmOverloads constructor(
                 persistAgentState()
                 if (_state.value.stopRequested) {
                     viewModelScope.launch(Dispatchers.IO) {
-                        runCatching { turn.stop() }.onFailure(::setStableError)
+                        runCatching { turn.stop() }
+                            .onSuccess { dispatched ->
+                                AgentTurnStateAudit.recordStop(event.agentId, dispatched)
+                            }
+                            .onFailure(::setStableError)
                     }
                 }
             }
@@ -776,6 +854,9 @@ class AgentChatViewModel @JvmOverloads constructor(
         val code = gateway?.gatewayCode ?: gateway?.errorCode?.name ?: error.message
             ?.takeIf { it.matches(Regex("[a-z0-9_]{1,64}")) }
             ?: "gateway_unavailable"
+        // The code is already a closed/bounded UI-safe value. Never log the exception, response
+        // body, prompt, URL, account metadata, or credential material from this boundary.
+        Log.i(STABLE_ERROR_AUDIT_TAG, "stable_error=$code")
         _state.update {
             it.copy(
                 connection = AgentConnectionState.STABLE_ERROR,
@@ -788,6 +869,13 @@ class AgentChatViewModel @JvmOverloads constructor(
 
     private fun Throwable.isActiveLoginConflict(): Boolean =
         (this as? GatewayClientException)?.gatewayCode in setOf("agent_login_active", "login_already_active")
+
+    private fun Throwable.isMissingLogin(): Boolean =
+        (this as? GatewayClientException)?.gatewayCode in setOf(
+            "login_not_found",
+            "agent_login_not_found",
+            "login_not_active",
+        )
 
     override fun onCleared() {
         loginPollJob?.cancel()
@@ -807,6 +895,7 @@ class AgentChatViewModel @JvmOverloads constructor(
         const val MAX_STORED_MESSAGES = 8
         const val MAX_STORED_MESSAGE_CHARS = 1_024
         const val MAX_CONVERSATION_LABEL_CHARS = 60
+        const val STABLE_ERROR_AUDIT_TAG = "AgentStateAudit"
 
         fun bindingKey(agentId: AgentId, conversationId: String): String =
             agentId.wireValue + "\u0000" + conversationId

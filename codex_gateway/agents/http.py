@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from http.server import BaseHTTPRequestHandler
 import json
 from typing import Any, Callable, Dict, Mapping, Tuple
 from urllib.parse import urlsplit
 
 from codex_gateway.agents.service import AgentGatewayService, AgentServiceError
-from codex_gateway.gateway import LOOPBACK_HOST, MAX_REQUEST_BYTES, MAX_SSE_EVENT_BYTES, _json_depth
+from codex_gateway.gateway import (
+    BoundedGatewayRequestHandler,
+    LOOPBACK_HOST,
+    MAX_REQUEST_BYTES,
+    MAX_SSE_EVENT_BYTES,
+    _json_depth,
+)
 
 
 RequestAuthorizer = Callable[[str, str, Mapping[str, Tuple[str, ...]], bytes], None]
@@ -20,21 +25,21 @@ def make_agent_handler(
 ):
     """Build a handler only when a verifier is explicitly supplied.
 
-    Phase 8 replaces the test authorizer with the session-capability verifier. There is no
-    unsigned compatibility default for the normalized routes.
+    Production supplies the session-capability verifier. There is no unsigned compatibility
+    default for the normalized routes.
     """
 
     if not isinstance(service, AgentGatewayService) or not callable(authorize_request):
         raise ValueError("normalized Agent handler requires service and request authorizer")
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(BoundedGatewayRequestHandler):
         server_version = "AlpineAgentGateway/0.1"
 
         def log_message(self, _format: str, *_args: Any) -> None:
             return
 
         def do_GET(self) -> None:  # noqa: N802
-            if not self._is_loopback_client():
+            if not self._is_trusted_client():
                 self._error(403, "loopback_required")
                 return
             try:
@@ -58,10 +63,11 @@ def make_agent_handler(
             except AgentServiceError as error:
                 self._error(error.status, error.code)
             except PermissionError:
+                self._record_auth_rejection()
                 self._error(401, "gateway_auth_failed")
 
         def do_POST(self) -> None:  # noqa: N802
-            if not self._is_loopback_client():
+            if not self._is_trusted_client():
                 self._error(403, "loopback_required")
                 return
             try:
@@ -97,6 +103,7 @@ def make_agent_handler(
             except AgentServiceError as error:
                 self._error(error.status, error.code)
             except PermissionError:
+                self._record_auth_rejection()
                 self._error(401, "gateway_auth_failed")
 
         def do_OPTIONS(self) -> None:  # noqa: N802
@@ -118,7 +125,7 @@ def make_agent_handler(
 
         def _validate_request_shape(self, method: str, path: str) -> None:
             host_values = self.headers.get_all("Host") or []
-            expected_host = f"{LOOPBACK_HOST}:{self.server.server_address[1]}"
+            expected_host = getattr(self.server, "expected_host", None)
             if len(host_values) != 1 or host_values[0] != expected_host:
                 raise AgentServiceError(400, "invalid_request")
             if self.headers.get_all("Origin") or self.headers.get_all("Transfer-Encoding"):
@@ -163,6 +170,10 @@ def make_agent_handler(
                 for key in self.headers.keys()
             }
             authorize_request(method, target, headers, body)
+            self._authorization_complete()
+
+        def _record_auth_rejection(self) -> None:
+            self._record_security_event("auth_rejected")
 
         @staticmethod
         def _request_object(body: bytes) -> Dict[str, Any]:
@@ -216,7 +227,8 @@ def make_agent_handler(
         def _error(self, status: int, code: str) -> None:
             self._json(status, {"error": {"code": code}})
 
-        def _is_loopback_client(self) -> bool:
-            return self.client_address[0] == LOOPBACK_HOST
+        def _is_trusted_client(self) -> bool:
+            checker = getattr(self.server, "is_trusted_client", None)
+            return bool(checker and checker(self.request, self.client_address))
 
     return Handler

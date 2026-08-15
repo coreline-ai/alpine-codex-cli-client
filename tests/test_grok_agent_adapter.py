@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+import os
+import stat
+import tempfile
 import threading
 import time
 import unittest
@@ -13,8 +17,14 @@ from codex_gateway.agents.grok import (
     GrokAgentAdapter,
     GrokRetryPolicy,
 )
+from codex_gateway.grok_acp.contract import (
+    AUTH_METHOD_ID,
+    CACHED_TOKEN_AUTH_METHOD_ID,
+    GrokInitializeState,
+    parse_model_catalog,
+)
 from codex_gateway.grok_acp.process import GrokSupervisorState
-from codex_gateway.grok_acp.rpc import AcpNotification, GrokProfileAudit
+from codex_gateway.grok_acp.rpc import AcpNotification, AcpRemoteError, GrokProfileAudit
 
 
 def model_state(rows=None, current="model-alpha"):
@@ -57,8 +67,10 @@ class FakeGrokSupervisor:
         self.state = GrokSupervisorState.READY
         self.generation = 7
         self.initialize_state = None
-        self.authenticated = False
+        self.authenticated_method_id = None
         self.auth_info_payload = {}
+        self.auth_info_unready_calls = 0
+        self.auth_info_calls = 0
         self.auth_url = "https://accounts.x.ai/device?challenge=fixture"
         self.auth_mode = "device"
         self.auth_url_unready_calls = 0
@@ -73,6 +85,7 @@ class FakeGrokSupervisor:
         self.authenticate_ignores_cancel = False
         self.listeners = []
         self.new_session_calls = []
+        self.load_session_calls = []
         self.resume_session_calls = []
         self.set_model_calls = []
         self.prompt_calls = []
@@ -81,6 +94,37 @@ class FakeGrokSupervisor:
         self.logout_calls = 0
         self.notification_sequence = 0
         self.profile_audit_value = GrokProfileAudit()
+
+    @property
+    def authenticated(self):
+        return self.authenticated_method_id in {AUTH_METHOD_ID, CACHED_TOKEN_AUTH_METHOD_ID}
+
+    @authenticated.setter
+    def authenticated(self, value):
+        self.authenticated_method_id = AUTH_METHOD_ID if value else None
+
+    @property
+    def model_response(self):
+        return self._model_response
+
+    @model_response.setter
+    def model_response(self, value):
+        self._model_response = value
+        try:
+            result = value["result"]
+            summaries, current = parse_model_catalog(result)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            self.initialize_state = None
+            return
+        self.initialize_state = GrokInitializeState(
+            protocol_version="1",
+            auth_method_id=AUTH_METHOD_ID,
+            models=summaries,
+            current_model_id=current,
+            can_load_session=True,
+            can_resume_session=True,
+            can_close_session=True,
+        )
 
     def start(self):
         self.state = GrokSupervisorState.READY
@@ -128,8 +172,13 @@ class FakeGrokSupervisor:
         return {"cancelled": True, "account": "discard-me"}
 
     def auth_info(self):
+        self.auth_info_calls += 1
         result = dict(self.auth_info_payload)
-        result["methodId"] = "grok.com" if self.authenticated else None
+        if self.authenticated and self.auth_info_unready_calls > 0:
+            self.auth_info_unready_calls -= 1
+            result["methodId"] = None
+        else:
+            result["methodId"] = self.authenticated_method_id if self.authenticated else None
         return result
 
     def logout(self):
@@ -145,11 +194,12 @@ class FakeGrokSupervisor:
     def list_models(self):
         return self.model_response
 
-    def new_session(self, working_directory, model_id=None):
-        self.new_session_calls.append((working_directory, model_id))
+    def new_session(self, working_directory):
+        self.new_session_calls.append(working_directory)
         return {"sessionId": "session-" + str(len(self.new_session_calls))}
 
     def load_session(self, session_id, working_directory):
+        self.load_session_calls.append((session_id, working_directory))
         return {}
 
     def resume_session(self, session_id, working_directory):
@@ -247,6 +297,19 @@ class GrokLoginTest(unittest.TestCase):
             )
         )
 
+    def test_browser_completion_trusts_standard_authenticate_without_private_probe(self):
+        self.supervisor.authenticate_release.clear()
+
+        login = self.adapter.start_device_login()
+        self.supervisor.authenticate_release.set()
+
+        deadline = time.monotonic() + 1.0
+        while self.adapter.login_status(login.request_id).state == "pending" and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual("authenticated", self.adapter.login_status(login.request_id).state)
+        self.assertEqual([1], self.supervisor.authenticate_calls)
+        self.assertEqual(0, self.supervisor.auth_info_calls)
+
     def test_auth_url_not_ready_timeout_cancels_exact_auth_sequence(self):
         self.supervisor.authenticate_release.clear()
         self.supervisor.auth_url_unready_calls = 10
@@ -319,12 +382,22 @@ class GrokLoginTest(unittest.TestCase):
         }
         account = self.adapter.account()
         self.assertTrue(account.authenticated)
+        self.assertEqual(0, self.supervisor.auth_info_calls)
         rendered = repr(account)
         for value in self.supervisor.auth_info_payload.values():
             self.assertNotIn(value, rendered)
         self.adapter.logout()
         self.assertEqual(1, self.supervisor.logout_calls)
         self.assertFalse(self.adapter.account().authenticated)
+
+    def test_persisted_oauth_cached_token_is_authenticated(self):
+        self.supervisor.authenticated = True
+        self.supervisor.authenticated_method_id = CACHED_TOKEN_AUTH_METHOD_ID
+
+        account = self.adapter.account()
+
+        self.assertTrue(account.authenticated)
+        self.assertFalse(account.requires_auth)
 
 
 class GrokModelsAndSessionTest(unittest.TestCase):
@@ -371,7 +444,7 @@ class GrokModelsAndSessionTest(unittest.TestCase):
         handle = self.adapter.start_turn(chat())
         events = list(self.adapter.stream(handle))
         self.assertEqual(["start", "done"], [event.event_type for event in events])
-        self.assertEqual([("/workspace", "model-alpha")], self.supervisor.new_session_calls)
+        self.assertEqual(["/workspace"], self.supervisor.new_session_calls)
         self.assertEqual(1, len(self.supervisor.prompt_calls))
 
         handle = self.adapter.start_turn(chat(model="model-beta", resume=True))
@@ -387,7 +460,26 @@ class GrokModelsAndSessionTest(unittest.TestCase):
         self.assertEqual(["session-1"], self.supervisor.close_session_calls)
         self.assertEqual((), self.adapter.conversation_bindings())
 
-    def test_agent_or_generation_mismatch_rejects_before_resume_and_prompt(self):
+    def test_new_session_selects_non_default_model_after_documented_session_new(self):
+        handle = self.adapter.start_turn(chat(model="model-beta"))
+        list(self.adapter.stream(handle))
+
+        self.assertEqual(["/workspace"], self.supervisor.new_session_calls)
+        self.assertEqual([("session-1", "model-beta")], self.supervisor.set_model_calls)
+
+    def test_session_setup_remote_errors_are_stage_specific_and_content_free(self):
+        self.supervisor.new_session = lambda _: (_ for _ in ()).throw(AcpRemoteError(-32602))
+        with self.assertRaises(GrokAdapterError) as caught:
+            self.adapter.start_turn(chat())
+        self.assertEqual("grok_session_new_remote_n32602", caught.exception.code)
+
+        self.supervisor.new_session = lambda _: {"sessionId": "session-new"}
+        self.supervisor.set_session_model = lambda *_: (_ for _ in ()).throw(AcpRemoteError(-32000))
+        with self.assertRaises(GrokAdapterError) as caught:
+            self.adapter.start_turn(chat(model="model-beta"))
+        self.assertEqual("grok_set_model_remote_n32000", caught.exception.code)
+
+    def test_agent_mismatch_rejects_and_generation_mismatch_loads_before_prompt(self):
         wrong_agent = AgentConversationBinding(
             agent_id=AgentId.CODEX,
             conversation_id="conversation-one",
@@ -401,28 +493,97 @@ class GrokModelsAndSessionTest(unittest.TestCase):
         stale = replace(wrong_agent, agent_id=AgentId.GROK, process_generation=6)
         adapter = GrokAgentAdapter("/workspace", self.supervisor, (stale,))
         adapter.activate()
-        with self.assertRaises(GrokAdapterError) as error:
-            adapter.start_turn(chat(resume=True))
-        self.assertEqual("conversation_generation_mismatch", error.exception.code)
+        handle = adapter.start_turn(chat(resume=True))
+        self.assertEqual("done", list(adapter.stream(handle))[-1].event_type)
+        self.assertEqual([("session-old", "/workspace")], self.supervisor.load_session_calls)
         self.assertEqual([], self.supervisor.resume_session_calls)
+        self.assertEqual([("session-old", "fixture prompt")], self.supervisor.prompt_calls)
+
+    def test_binding_store_loads_official_session_after_gateway_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            os.chmod(directory, 0o700)
+            store = os.path.join(directory, "conversation-bindings.v1.json")
+            first_supervisor = FakeGrokSupervisor()
+            first_supervisor.authenticated = True
+            first = GrokAgentAdapter(
+                "/workspace",
+                first_supervisor,
+                binding_store_path=store,
+            )
+            first.activate()
+            first_handle = first.start_turn(chat())
+            self.assertEqual("done", list(first.stream(first_handle))[-1].event_type)
+
+            self.assertEqual(0o600, stat.S_IMODE(os.stat(store).st_mode))
+            with open(store, encoding="utf-8") as source:
+                payload = json.load(source)
+            self.assertEqual(1, payload["schema_version"])
+            self.assertEqual("grok", payload["bindings"][0]["agent_id"])
+            self.assertNotIn("fixture prompt", repr(payload))
+
+            second_supervisor = FakeGrokSupervisor()
+            second_supervisor.authenticated = True
+            second = GrokAgentAdapter(
+                "/workspace",
+                second_supervisor,
+                binding_store_path=store,
+            )
+            second.activate()
+            second_handle = second.start_turn(chat(resume=True))
+            self.assertEqual("done", list(second.stream(second_handle))[-1].event_type)
+
+            self.assertEqual([], second_supervisor.new_session_calls)
+            self.assertEqual([("session-1", "/workspace")], second_supervisor.load_session_calls)
+            self.assertEqual([("session-1", "fixture prompt")], second_supervisor.prompt_calls)
+
+    def test_restored_binding_load_error_is_stage_specific_and_content_free(self):
+        stale = AgentConversationBinding(
+            agent_id=AgentId.GROK,
+            conversation_id="conversation-one",
+            backend_session_id="session-old",
+            model_id="model-alpha",
+            process_generation=6,
+        )
+        adapter = GrokAgentAdapter("/workspace", self.supervisor, (stale,))
+        adapter.activate()
+        self.supervisor.load_session = lambda *_: (_ for _ in ()).throw(
+            AcpRemoteError(-32603, remote_category="FS_NOT_FOUND"),
+        )
+
+        with self.assertRaises(GrokAdapterError) as caught:
+            adapter.start_turn(chat(resume=True))
+
+        self.assertEqual(
+            "grok_session_load_remote_n32603_fs_not_found",
+            caught.exception.code,
+        )
+        self.assertNotIn("session-old", str(caught.exception))
         self.assertEqual([], self.supervisor.prompt_calls)
 
     def test_stop_is_idempotent_for_one_active_session(self):
         release = threading.Event()
+        prompt_started = threading.Event()
 
         def blocking_prompt(session_id, text):
             self.supervisor.prompt_calls.append((session_id, text))
+            prompt_started.set()
             release.wait(1.0)
             return {"stopReason": "cancelled"}
 
         self.supervisor.prompt = blocking_prompt
         handle = self.adapter.start_turn(chat())
+        self.assertTrue(prompt_started.wait(1.0))
         self.adapter.interrupt(handle.request_id)
         self.adapter.interrupt(handle.request_id)
         self.assertEqual(["session-1"], self.supervisor.cancel_session_calls)
-        release.set()
+        # The acknowledged session/cancel owns the terminal event. Do not wait for the blocked
+        # session/prompt response, which the real Grok CLI may leave open past the SSE timeout.
         events = list(self.adapter.stream(handle))
         self.assertEqual("turn_interrupted", events[-1].code)
+        self.assertEqual(1, events[-1].diagnostics.prompt_dispatch_count)
+        self.assertEqual(1, events[-1].diagnostics.cancel_dispatch_count)
+        self.assertEqual(1, events[-1].diagnostics.terminal_count)
+        release.set()
 
 
 class GrokStreamPolicyTest(unittest.TestCase):
@@ -453,7 +614,7 @@ class GrokStreamPolicyTest(unittest.TestCase):
         handle, release = self.blocking_turn()
         self.supervisor.emit("session/update", agent_chunk("first"))
         self.supervisor.emit("session/update", agent_chunk(""))
-        self.supervisor.emit("session/update", agent_chunk("second"))
+        self.supervisor.emit("_x.ai/session/update", agent_chunk("second"))
         terminal = {
             "sessionId": "session-1",
             "promptId": "prompt-1",
@@ -465,14 +626,31 @@ class GrokStreamPolicyTest(unittest.TestCase):
         release.set()
 
         events = list(self.adapter.stream(handle))
-        self.assertEqual(["start", "delta", "delta", "done"], [item.event_type for item in events])
-        self.assertEqual(["first", "second"], [item.text for item in events if item.event_type == "delta"])
+        self.assertEqual(
+            ["start", "delta", "delta", "delta", "done"],
+            [item.event_type for item in events],
+        )
+        self.assertEqual(
+            ["first", "second", "late"],
+            [item.text for item in events if item.event_type == "delta"],
+        )
         self.assertEqual([("session-1", "fixture prompt")], self.supervisor.prompt_calls)
         metrics = self.adapter.turn_metrics()
         self.assertEqual(1, metrics.prompt_dispatch_count)
-        self.assertEqual(2, metrics.visible_delta_count)
+        self.assertEqual(3, metrics.visible_delta_count)
         self.assertEqual(1, metrics.terminal_count)
         self.assertEqual(0, metrics.cancel_dispatch_count)
+
+    def test_content_arriving_after_prompt_response_is_drained_before_done(self):
+        handle = self.adapter.start_turn(chat())
+        time.sleep(0.05)
+        self.supervisor.emit("session/update", agent_chunk("post-response"))
+
+        events = list(self.adapter.stream(handle))
+
+        self.assertEqual(["start", "delta", "done"], [item.event_type for item in events])
+        self.assertEqual("post-response", events[1].text)
+        self.assertEqual(1, events[-1].diagnostics.visible_delta_count)
 
     def test_large_and_malformed_content_fail_closed_without_second_prompt(self):
         for value, expected in (

@@ -84,6 +84,8 @@ internal class RuntimeArtifactInstaller(
     private val marker = File(runtimeDirectory, "runtime.properties")
     private val markerNext = File(runtimeDirectory, "runtime.properties.next")
     private val markerPrevious = File(runtimeDirectory, "runtime.properties.previous")
+    private val rootfsRollback = File(runtimeDirectory, "rootfs.rollback")
+    private val markerRollback = File(runtimeDirectory, "runtime.properties.rollback")
     private val activationPending = File(runtimeDirectory, "activation.pending")
 
     @Synchronized
@@ -92,15 +94,17 @@ internal class RuntimeArtifactInstaller(
         workspaceDirectory.mkdirs()
         if (activationPending.isFile) {
             val pending = readProperties(activationPending)
+            if (pending?.getProperty(KEY_OPERATION) == OPERATION_ROLLBACK) {
+                recoverInterruptedExplicitRollback(pending)
+                return
+            }
             val expectedFingerprint = pending?.getProperty(KEY_EXPECTED_FINGERPRINT)
             val active = readProperties(marker)
             val committed = expectedFingerprint != null &&
                 active != null &&
                 fingerprint(active) == expectedFingerprint &&
-                rootfsShellExists(rootfs)
+                installedRuntimeIsHealthy(active, rootfs)
             if (committed) {
-                rootfsPrevious.deleteRecursively()
-                markerPrevious.delete()
                 clearTransactionFiles()
                 return
             }
@@ -108,10 +112,12 @@ internal class RuntimeArtifactInstaller(
             return
         }
 
-        if (!rootfs.exists() && rootfsPrevious.exists()) {
+        val activePairComplete = rootfs.exists() && marker.isFile
+        val previousPairComplete = rootfsPrevious.exists() && markerPrevious.isFile
+        if (!activePairComplete && previousPairComplete) {
+            rootfs.deleteRecursively()
+            marker.delete()
             move(rootfsPrevious, rootfs)
-        }
-        if (!marker.exists() && markerPrevious.exists()) {
             move(markerPrevious, marker)
         }
         rootfsStaging.deleteRecursively()
@@ -259,6 +265,57 @@ internal class RuntimeArtifactInstaller(
         )
     }
 
+    /**
+     * Atomically swaps the active runtime with the retained previous generation.
+     *
+     * This boundary is intentionally internal: callers must complete their own
+     * post-start Runtime/Python/Gateway smoke before deciding to invoke rollback.
+     * Workspace and credential/session roots are outside every moved path.
+     */
+    @Synchronized
+    fun rollbackToPrevious(): Boolean {
+        recoverInterruptedActivation()
+        val active = readProperties(marker)
+            ?: throw unhealthyRuntime("active runtime marker is unavailable")
+        val previous = readProperties(markerPrevious)
+        val previousRootfsExists = rootfsPrevious.exists()
+        if (previous == null && !previousRootfsExists) return false
+        if (previous == null || !previousRootfsExists) {
+            throw unhealthyRuntime("previous runtime generation is incomplete")
+        }
+        if (!installedRuntimeIsHealthy(active, rootfs)) {
+            throw unhealthyRuntime("active runtime generation is not healthy")
+        }
+        if (!installedRuntimeIsHealthy(previous, rootfsPrevious)) {
+            throw unhealthyRuntime("previous runtime generation is not healthy")
+        }
+
+        deleteOrThrow(rootfsRollback, "rollback rootfs staging")
+        deleteOrThrow(markerRollback, "rollback marker staging")
+        val pending = Properties().apply {
+            setProperty(KEY_OPERATION, OPERATION_ROLLBACK)
+            setProperty(KEY_EXPECTED_FINGERPRINT, fingerprint(previous))
+        }
+        writeProperties(activationPending, pending)
+        faultInjector.checkpoint(RuntimeInstallCheckpoint.BEFORE_ACTIVATION)
+        try {
+            move(rootfs, rootfsRollback)
+            move(marker, markerRollback)
+            faultInjector.checkpoint(RuntimeInstallCheckpoint.AFTER_BACKUP)
+            move(rootfsPrevious, rootfs)
+            faultInjector.checkpoint(RuntimeInstallCheckpoint.AFTER_ROOTFS_ACTIVATION)
+            move(markerPrevious, marker)
+            faultInjector.checkpoint(RuntimeInstallCheckpoint.AFTER_MARKER_ACTIVATION)
+            move(rootfsRollback, rootfsPrevious)
+            move(markerRollback, markerPrevious)
+            activationPending.delete()
+        } catch (error: Exception) {
+            recoverInterruptedExplicitRollback(pending)
+            throw error
+        }
+        return true
+    }
+
     @Synchronized
     fun reset() {
         rootfs.deleteRecursively()
@@ -268,6 +325,8 @@ internal class RuntimeArtifactInstaller(
         marker.delete()
         markerNext.delete()
         markerPrevious.delete()
+        rootfsRollback.deleteRecursively()
+        markerRollback.delete()
         activationPending.delete()
         // User workspace intentionally survives runtime reset.
     }
@@ -361,12 +420,15 @@ internal class RuntimeArtifactInstaller(
     }
 
     private fun activate(properties: Properties) {
-        markerNext.delete()
-        markerPrevious.delete()
-        rootfsPrevious.deleteRecursively()
+        deleteOrThrow(markerNext, "next runtime marker")
+        deleteOrThrow(markerPrevious, "previous runtime marker")
+        deleteOrThrow(rootfsPrevious, "previous rootfs generation")
         writeProperties(markerNext, properties)
         val pending = Properties().apply {
+            setProperty(KEY_OPERATION, OPERATION_INSTALL)
             setProperty(KEY_EXPECTED_FINGERPRINT, fingerprint(properties))
+            setProperty(KEY_HAD_ACTIVE_ROOTFS, rootfs.exists().toString())
+            setProperty(KEY_HAD_ACTIVE_MARKER, marker.isFile.toString())
         }
         writeProperties(activationPending, pending)
         faultInjector.checkpoint(RuntimeInstallCheckpoint.BEFORE_ACTIVATION)
@@ -379,8 +441,6 @@ internal class RuntimeArtifactInstaller(
             move(markerNext, marker)
             faultInjector.checkpoint(RuntimeInstallCheckpoint.AFTER_MARKER_ACTIVATION)
             activationPending.delete()
-            rootfsPrevious.deleteRecursively()
-            markerPrevious.delete()
         } catch (error: Exception) {
             rollbackActivation()
             throw error
@@ -393,13 +453,60 @@ internal class RuntimeArtifactInstaller(
             val expected = pending?.getProperty(KEY_EXPECTED_FINGERPRINT)
             val active = readProperties(marker)
             val activeIsNew = expected != null && active != null && fingerprint(active) == expected
-            val previousWasMoved = rootfsPrevious.exists() || markerPrevious.exists()
-            if (previousWasMoved || active == null || activeIsNew) {
+            val hadActiveRootfs = pending?.getProperty(KEY_HAD_ACTIVE_ROOTFS)?.toBooleanStrictOrNull()
+            val hadActiveMarker = pending?.getProperty(KEY_HAD_ACTIVE_MARKER)?.toBooleanStrictOrNull()
+            if (rootfsPrevious.exists()) {
                 rootfs.deleteRecursively()
+                move(rootfsPrevious, rootfs)
+            } else if (hadActiveRootfs == false || (hadActiveRootfs == null && activeIsNew)) {
+                rootfs.deleteRecursively()
+            }
+            if (markerPrevious.exists()) {
+                marker.delete()
+                move(markerPrevious, marker)
+            } else if (hadActiveMarker == false || (hadActiveMarker == null && activeIsNew)) {
                 marker.delete()
             }
-            if (rootfsPrevious.exists()) move(rootfsPrevious, rootfs)
-            if (markerPrevious.exists()) move(markerPrevious, marker)
+        }
+        clearTransactionFiles()
+    }
+
+    private fun recoverInterruptedExplicitRollback(pending: Properties) {
+        val expected = pending.getProperty(KEY_EXPECTED_FINGERPRINT)
+        val active = readProperties(marker)
+        val committed = expected != null &&
+            active != null &&
+            fingerprint(active) == expected &&
+            installedRuntimeIsHealthy(active, rootfs)
+        if (committed) {
+            if (!rootfsPrevious.exists() && rootfsRollback.exists()) {
+                move(rootfsRollback, rootfsPrevious)
+            }
+            if (!markerPrevious.exists() && markerRollback.exists()) {
+                move(markerRollback, markerPrevious)
+            }
+            if (rootfsRollback.exists() || markerRollback.exists()) {
+                throw unhealthyRuntime("rollback transaction has conflicting generation files")
+            }
+            clearTransactionFiles()
+            return
+        }
+
+        if (rootfsRollback.exists()) {
+            if (!rootfsPrevious.exists() && rootfs.exists()) {
+                move(rootfs, rootfsPrevious)
+            } else if (rootfs.exists()) {
+                rootfs.deleteRecursively()
+            }
+            move(rootfsRollback, rootfs)
+        }
+        if (markerRollback.exists()) {
+            if (!markerPrevious.exists() && marker.exists()) {
+                move(marker, markerPrevious)
+            } else if (marker.exists()) {
+                marker.delete()
+            }
+            move(markerRollback, marker)
         }
         clearTransactionFiles()
     }
@@ -539,6 +646,24 @@ internal class RuntimeArtifactInstaller(
         }.getOrDefault(false)
     }
 
+    private fun installedRuntimeIsHealthy(properties: Properties, rootfsDirectory: File): Boolean =
+        runCatching {
+            rootfsShellExists(rootfsDirectory) &&
+                verifyExecutable(
+                    nativeFile(properties.getProperty(KEY_LAUNCHER_FILE)),
+                    properties.getProperty(KEY_LAUNCHER_SHA256),
+                ) &&
+                verifyExecutable(
+                    nativeFile(properties.getProperty(KEY_LOADER_FILE)),
+                    properties.getProperty(KEY_LOADER_SHA256),
+                )
+        }.getOrDefault(false)
+
+    private fun unhealthyRuntime(message: String) = RuntimeInstallException(
+        RuntimeErrorCode.HEALTH_CHECK_FAILED,
+        message,
+    )
+
     private fun nativeFile(name: String?): File {
         val safeName = name?.let(::safeFileName) ?: return File(nativeLibraryDirectory, "missing")
         return File(nativeLibraryDirectory, safeName)
@@ -630,6 +755,15 @@ internal class RuntimeArtifactInstaller(
         }
     }
 
+    private fun deleteOrThrow(path: File, label: String) {
+        if (path.exists() && (!path.deleteRecursively() || path.exists())) {
+            throw RuntimeInstallException(
+                RuntimeErrorCode.STORAGE_UNAVAILABLE,
+                "failed to clear $label",
+            )
+        }
+    }
+
     private fun throwIfCancelled(isCancelled: () -> Boolean) {
         if (isCancelled()) throw CancellationException("runtime installation cancelled")
     }
@@ -661,5 +795,10 @@ internal class RuntimeArtifactInstaller(
         private const val KEY_LOADER_FILE = "loader.file"
         private const val KEY_ARTIFACT_IDS = "artifact.ids"
         private const val KEY_EXPECTED_FINGERPRINT = "expected.fingerprint"
+        private const val KEY_OPERATION = "operation"
+        private const val KEY_HAD_ACTIVE_ROOTFS = "had.active.rootfs"
+        private const val KEY_HAD_ACTIVE_MARKER = "had.active.marker"
+        private const val OPERATION_INSTALL = "install"
+        private const val OPERATION_ROLLBACK = "rollback"
     }
 }

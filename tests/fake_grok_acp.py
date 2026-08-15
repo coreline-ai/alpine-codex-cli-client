@@ -13,6 +13,7 @@ import time
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
 LOCK = threading.Lock()
 INITIALIZED_AT = 0.0
+AUTH_METHOD = None
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "grok-acp-v1.0.0.json").read_text())
 
@@ -44,7 +45,11 @@ def notification(method, params):
 
 
 def initialize_result():
-    return FIXTURE["initializeResult"]
+    result = json.loads(json.dumps(FIXTURE["initializeResult"]))
+    if MODE == "cached_auth":
+        result["authMethods"].insert(0, {"name": "cached_token", "id": "cached_token"})
+        result["_meta"]["defaultAuthMethodId"] = "cached_token"
+    return result
 
 
 def emit_initialize(request_id):
@@ -98,6 +103,7 @@ def delayed_emit(seconds, value):
 
 
 def handle(message):
+    global AUTH_METHOD
     request_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -141,10 +147,18 @@ def handle(message):
     if method == "session/cancel" and request_id is None:
         return True
     if method == "authenticate":
+        if MODE == "cached_auth":
+            if params.get("methodId") != "cached_token" or "_meta" in params:
+                emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602}})
+                return True
+            AUTH_METHOD = "cached_token"
+            emit(response(request_id, {"private": "discard-me"}))
+            return True
         meta = params.get("_meta", {})
         if not isinstance(meta.get("request_seq"), int) or "use_oauth" in meta:
             emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602}})
             return True
+        AUTH_METHOD = "grok.com"
         emit(response(request_id, {}))
         return True
     if method == "_x.ai/auth/get_url":
@@ -153,15 +167,19 @@ def handle(message):
     if method == "_x.ai/auth/info":
         if MODE == "reject_early_auth" and time.monotonic() - INITIALIZED_AT < 0.2:
             return False
-        emit(response(request_id, {"methodId": None}))
+        emit(response(request_id, {"methodId": AUTH_METHOD}))
         return True
     if method == "_x.ai/auth/cancel":
         emit(response(request_id, {"cancelled": True}))
         return True
     if method == "_x.ai/auth/logout":
+        AUTH_METHOD = None
         emit(response(request_id, {"ok": True}))
         return True
     if method == "session/new":
+        if set(params) != {"cwd", "mcpServers"} or params.get("mcpServers") != []:
+            emit({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602}})
+            return True
         emit(response(request_id, {"sessionId": "session-1"}))
         return True
     if method in {"session/load", "session/resume"}:

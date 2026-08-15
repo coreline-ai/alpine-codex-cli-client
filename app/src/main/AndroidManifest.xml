@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Required for Alpine package bootstrap and the loopback gateway's Codex CLI OAuth traffic. -->
+    <!-- Required for Alpine package bootstrap and the official CLI OAuth/provider traffic. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:label="${appLabel}"
         android:name=".AlpineCodexApplication"
         android:supportsRtl="true"

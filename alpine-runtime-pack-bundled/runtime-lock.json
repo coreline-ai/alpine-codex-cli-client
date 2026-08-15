@@ -1,0 +1,44 @@
+{
+  "artifacts": {
+    "proot": {
+      "license": "GPL-2.0-or-later",
+      "path": "alpine-runtime-pack-bundled/src/main/jniLibs/arm64-v8a/libproot.so",
+      "sha256": "5d2959c3a58f82609c8b95a92496835099a96faa8efc12f68e171a3597b5bc29",
+      "size": 279144,
+      "version": "8cf13e997cdc9472997aae19df8050c073c9a86c"
+    },
+    "proot_loader": {
+      "license": "GPL-2.0-or-later AND LGPL-3.0-or-later",
+      "path": "alpine-runtime-pack-bundled/src/main/jniLibs/arm64-v8a/libproot-loader.so",
+      "sha256": "12d2b63e897fd91a334fce23edea5d2419cae4d5fd2a369f05d03ab75682add0",
+      "size": 17624,
+      "version": "8cf13e997cdc9472997aae19df8050c073c9a86c"
+    },
+    "rootfs": {
+      "path": "alpine-runtime-pack-bundled/src/main/assets/alpine-minirootfs.tar.gz.asset",
+      "sha256": "ead8a4b37867bd19e7417dd078748e2312c0aea364403d96758d63ea8ff261ea",
+      "size": 3850365
+    },
+    "sbom": {
+      "path": "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json",
+      "sha256": "f9e0842e72e5a3ff35a89ec1d46ced293844d5538de0df1a5a5dfa4134947b89",
+      "size": 16029
+    },
+    "vulnerability_snapshot": {
+      "path": "security/alpine-vulnerability-snapshot.json",
+      "sha256": "8621e3d0bff725f83fc6fe1fbad6c9a3271ad9f3882bb9b59c7e13125e602305",
+      "size": 925
+    }
+  },
+  "rootfs": {
+    "alpine_version": "3.21.3",
+    "apk_architecture": "aarch64",
+    "package_count": 15,
+    "python_prebundled": false
+  },
+  "runtime": {
+    "runtime_version": "3.21.3-openminis-8cf13e9-unpatched1",
+    "sbom_created": "2026-08-15T00:00:00Z"
+  },
+  "schema_version": 1
+}

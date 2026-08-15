@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks the debug source, tracked files, and optional APK for forbidden auth paths."""
+"""Checks app source, tracked files, and an optional APK for forbidden auth paths."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ SOURCE_ROOTS = (
     "codex-cli-pack",
     "grok-cli-pack",
     "codex-gateway-pack-bundled",
+    "alpine-python-pack-bundled",
 )
 TEXT_SUFFIXES = {".kt", ".kts", ".java", ".py", ".xml", ".json"}
 FORBIDDEN_TEXT = {
@@ -85,19 +86,6 @@ def check_source(project_root: Path) -> None:
         for label, pattern in FORBIDDEN_TEXT.items():
             if pattern.search(text):
                 fail(label, path.relative_to(project_root))
-    gradle_files = [path for path in project_root.rglob("*.gradle.kts") if "/build/" not in path.as_posix()]
-    signing = re.compile(r"\b(signingConfigs?|storeFile|storePassword|keyAlias|keyPassword)\b")
-    explicit_release = re.compile(r"\b(?:getByName|named|create|register)\s*\(\s*\"(?:release|assembleRelease|bundleRelease)")
-    for path in gradle_files:
-        text = path.read_text(encoding="utf-8")
-        audited = text.replace(
-            'signingConfig = signingConfigs.getByName("debug")',
-            'debugCertificate = fixedDebugCertificate',
-        )
-        if signing.search(audited):
-            fail("release-signing", path.relative_to(project_root))
-        if explicit_release.search(text):
-            fail("release-artifact-route", path.relative_to(project_root))
 
 
 def check_tracked_files(project_root: Path) -> None:
@@ -128,28 +116,34 @@ def read_locked_clis(project_root: Path) -> dict[str, tuple[int, str]]:
             binary_size = lock["binary_size"]
             binary_sha256 = lock["binary_sha256"]
         except (KeyError, OSError, json.JSONDecodeError) as error:
-            raise SystemExit("debug CLI lock is unavailable for APK scan") from error
+            raise SystemExit("CLI lock is unavailable for APK scan") from error
         if (
             not isinstance(binary_size, int)
             or binary_size <= 0
             or not isinstance(binary_sha256, str)
             or not re.fullmatch(r"[0-9a-f]{64}", binary_sha256)
         ):
-            raise SystemExit("debug CLI lock is invalid for APK scan")
+            raise SystemExit("CLI lock is invalid for APK scan")
         values[asset_path] = (binary_size, binary_sha256)
     return values
 
 
 def check_apk(project_root: Path, apk_path: Path) -> None:
     if not apk_path.is_file():
-        raise SystemExit("debug APK is unavailable for clean-room scan")
+        raise SystemExit("APK is unavailable for clean-room scan")
     found_inventory = False
+    python_pack_status: dict[str, object] | None = None
     locked_clis = read_locked_clis(project_root)
     found_locked_clis: set[str] = set()
     with zipfile.ZipFile(apk_path) as archive:
         for entry in archive.infolist():
-            if entry.filename == "assets/META-INF/alpine-codex/debug-component-inventory.json":
+            if entry.filename == "assets/META-INF/alpine-codex/component-inventory.json":
                 found_inventory = True
+            if entry.filename == "assets/alpine-python-pack/pack-status.json":
+                try:
+                    python_pack_status = json.loads(archive.read(entry).decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise SystemExit("Python package pack status is invalid in APK") from error
             if entry.filename in locked_clis:
                 locked_cli_size, locked_cli_sha256 = locked_clis[entry.filename]
                 digest = hashlib.sha256()
@@ -171,7 +165,24 @@ def check_apk(project_root: Path, apk_path: Path) -> None:
                         fail("forbidden-auth-or-provider-byte-in-apk", Path(entry.filename))
                     tail = lowered[-64:]
     if not found_inventory:
-        raise SystemExit("debug component inventory asset is missing from APK")
+        raise SystemExit("component inventory asset is missing from APK")
+    if (
+        not isinstance(python_pack_status, dict)
+        or python_pack_status.get("schema") != 1
+        or not isinstance(python_pack_status.get("available"), bool)
+    ):
+        raise SystemExit("Python package pack status is missing from APK")
+    if python_pack_status["available"] is False:
+        with zipfile.ZipFile(apk_path) as archive:
+            forbidden_unavailable_payload = {
+                "assets/alpine-python-pack/python-pack.lock.json",
+                "assets/alpine-python-pack/sbom.spdx.json",
+            }
+            if forbidden_unavailable_payload.intersection(archive.namelist()) or any(
+                name.startswith("assets/alpine-python-pack/packages/") and not name.endswith("/")
+                for name in archive.namelist()
+            ):
+                raise SystemExit("unavailable Python package status hides an APK payload")
     if found_locked_clis != set(locked_clis):
         raise SystemExit("locked CLI asset is missing from APK")
 
@@ -181,7 +192,7 @@ def verify(project_root: Path, apk: Path | None) -> None:
     check_tracked_files(project_root)
     if apk is not None:
         check_apk(project_root, apk)
-    print("debug clean-room scan: PASS")
+    print("app clean-room scan: PASS")
 
 
 if __name__ == "__main__":

@@ -513,10 +513,12 @@ class RuntimeHostController @JvmOverloads constructor(
                 update { current -> current.copy(operation = RuntimeHostOperation.IDLE, lastErrorCode = stableError(error)) }
             }
         }
+        val tracked = CompletableFuture<T>()
         stage.whenComplete { value, error ->
             if (error == null) {
                 runCatching { onSuccess(value) }
                 update { it.copy(operation = RuntimeHostOperation.IDLE, lastErrorCode = null) }
+                tracked.complete(value)
             } else {
                 update {
                     it.copy(
@@ -524,9 +526,10 @@ class RuntimeHostController @JvmOverloads constructor(
                         lastErrorCode = stableError(error),
                     )
                 }
+                tracked.completeExceptionally(error)
             }
         }
-        return stage
+        return tracked
     }
 
     private fun update(transform: (RuntimeHostState) -> RuntimeHostState) {

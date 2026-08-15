@@ -28,6 +28,21 @@ class RuntimeHostControllerTest {
     }
 
     @Test
+    fun `start completion publishes the session before a chained command runs`() {
+        val manager = ImmediateRuntimeManager()
+        val controller = RuntimeHostController(manager)
+        controller.install().toCompletableFuture().join()
+
+        val command = controller.start().thenCompose {
+            controller.execute(RuntimeCommandRequest("/bin/uname", listOf("-m")))
+        }.toCompletableFuture().join()
+
+        assertEquals(0, command.exitCode)
+        assertTrue(controller.currentState().sessionActive)
+        assertEquals("/bin/uname", manager.startedSession?.lastRequest?.executable)
+    }
+
+    @Test
     fun `terminal output is bounded and reset clears user-visible state`() {
         val manager = ImmediateRuntimeManager()
         val controller = RuntimeHostController(manager, maxTerminalBufferBytes = 8)

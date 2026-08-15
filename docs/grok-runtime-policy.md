@@ -64,10 +64,12 @@ exact authentication sequence.
 
 `grok-profile/chat-only.md` is packaged only as a debug asset and locked by exact size and SHA-256.
 It disables skill and AGENTS discovery, inherited skills, MCP servers, background work, and uses plan
-permission mode. For pinned Grok CLI 1.0.0, the profile uses `task` as a deliberate allowlist sentinel:
+permission mode. For pinned Grok CLI 1.0.0, the profile uses `task` as a deliberate allowlist sentinel
+and also denies it explicitly:
 
-1. `GROK_SUBAGENTS=0` removes `task` and its dependent tools.
-2. A non-empty recognized allowlist then removes the remaining default toolset.
+1. The denylist removes `task` before allowlist resolution, independently of whether the upstream
+   `GROK_SUBAGENTS=0` setting is applied early enough during session construction.
+2. The still-recognized, non-empty `task` allowlist then removes the remaining default toolset.
 3. Upstream preserves `search_tool` and `use_tool` specially during allowlisting, so both are explicitly
    denied before that step.
 

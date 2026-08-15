@@ -4,6 +4,22 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseStoreFile = providers.environmentVariable("ALPINE_RELEASE_STORE_FILE")
+val releaseStorePassword = providers.environmentVariable("ALPINE_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("ALPINE_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("ALPINE_RELEASE_KEY_PASSWORD")
+val releaseSigningValues = listOf(
+    releaseStoreFile.orNull,
+    releaseStorePassword.orNull,
+    releaseKeyAlias.orNull,
+    releaseKeyPassword.orNull,
+)
+val hasAnyReleaseSigningInput = releaseSigningValues.any { !it.isNullOrBlank() }
+val hasCompleteReleaseSigningInputs = releaseSigningValues.all { !it.isNullOrBlank() }
+check(!hasAnyReleaseSigningInput || hasCompleteReleaseSigningInputs) {
+    "Release signing requires all four ALPINE_RELEASE_* environment variables"
+}
+
 android {
     namespace = "dev.alpine.codexclient"
     compileSdk = 36
@@ -17,6 +33,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appLabel"] = "Alpine Agent Client"
         ndk { abiFilters += "arm64-v8a" }
+    }
+
+    signingConfigs {
+        if (hasCompleteReleaseSigningInputs) {
+            create("externalRelease") {
+                storeFile = rootProject.file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
     }
 
     buildTypes {
@@ -35,6 +62,15 @@ android {
             manifestPlaceholders["appLabel"] = "Alpine Agent Client"
             buildConfigField("boolean", "ALLOW_REAL_OAUTH", "true")
         }
+        getByName("release") {
+            isDebuggable = false
+            isMinifyEnabled = false
+            manifestPlaceholders["appLabel"] = "Alpine Agent Client"
+            buildConfigField("boolean", "ALLOW_REAL_OAUTH", "true")
+            if (hasCompleteReleaseSigningInputs) {
+                signingConfig = signingConfigs.getByName("externalRelease")
+            }
+        }
     }
 
     buildFeatures {
@@ -43,14 +79,13 @@ android {
     }
 
     // The installer copies the bundled rootfs as an asset and executes PRoot
-    // from the native-library directory inside this debug-only APK.
+    // from the native-library directory inside the selected app variant.
     androidResources {
         noCompress += "asset"
     }
 
     sourceSets {
-        getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets/audit"))
-        getByName("secureDebug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets/audit"))
+        getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/distribution/assets/audit"))
     }
 
     packaging {
@@ -69,37 +104,79 @@ android {
     }
 }
 
-val debugComponentInventory = layout.buildDirectory.file(
-    "generated/debug/assets/audit/META-INF/alpine-codex/debug-component-inventory.json",
+val componentInventory = layout.buildDirectory.file(
+    "generated/distribution/assets/audit/META-INF/alpine-codex/component-inventory.json",
+)
+val pythonPackagePackAssets = rootProject.layout.projectDirectory.dir(
+    "alpine-python-pack-bundled/build/generated/distribution/assets/alpine-python-pack",
 )
 
-val generateDebugComponentInventory by tasks.registering(Exec::class) {
+val generateComponentInventory by tasks.registering(Exec::class) {
     group = "verification"
-    description = "Generates the debug-only component, license, and SBOM inventory asset."
+    description = "Generates the shared component, license, and SBOM inventory asset."
     inputs.file(rootProject.layout.projectDirectory.file("gradle/libs.versions.toml"))
     inputs.file(rootProject.layout.projectDirectory.file("codex-cli-pack/codex-cli.lock.json"))
     inputs.file(rootProject.layout.projectDirectory.file("grok-cli-pack/grok-cli.lock.json"))
     inputs.file(rootProject.layout.projectDirectory.file(
         "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json",
     ))
-    inputs.file(rootProject.layout.projectDirectory.file("scripts/generate-debug-component-inventory.py"))
-    outputs.file(debugComponentInventory)
+    inputs.file(rootProject.layout.projectDirectory.file("scripts/generate-component-inventory.py"))
+    inputs.dir(pythonPackagePackAssets)
+    outputs.file(componentInventory)
+    dependsOn(":alpine-python-pack-bundled:preparePythonPackagePackAssets")
     commandLine(
         "python3",
-        rootProject.layout.projectDirectory.file("scripts/generate-debug-component-inventory.py").asFile.absolutePath,
+        rootProject.layout.projectDirectory.file("scripts/generate-component-inventory.py").asFile.absolutePath,
         "--project-root",
         rootProject.layout.projectDirectory.asFile.absolutePath,
         "--output",
-        debugComponentInventory.get().asFile.absolutePath,
+        componentInventory.get().asFile.absolutePath,
+        "--python-pack-assets",
+        pythonPackagePackAssets.asFile.absolutePath,
     )
+}
+
+val verifyReleaseSigningInputs by tasks.registering {
+    group = "verification"
+    description = "Fails release packaging unless external signing inputs are complete and readable."
+    doLast {
+        check(hasCompleteReleaseSigningInputs) {
+            "Public release packaging requires externally supplied ALPINE_RELEASE_* signing inputs"
+        }
+        val configuredStore = rootProject.file(releaseStoreFile.get())
+        check(configuredStore.isFile && configuredStore.canRead()) {
+            "ALPINE_RELEASE_STORE_FILE is not a readable file"
+        }
+    }
+}
+
+val verifyReleasePythonPackagePack by tasks.registering {
+    group = "verification"
+    description = "Fails public release packaging unless an APK-contained production Python pack exists."
+    dependsOn(":alpine-python-pack-bundled:verifyProductionPythonPackagePack")
 }
 
 tasks.configureEach {
     if (
-        name == "mergeDebugAssets" || name == "mergeSecureDebugAssets" ||
-        (name.contains("Debug") && name.lowercase().contains("lint"))
+        (name.startsWith("merge") && name.endsWith("Assets")) ||
+        name.lowercase().contains("lint")
     ) {
-        dependsOn(generateDebugComponentInventory)
+        dependsOn(generateComponentInventory)
+    }
+    if (
+        name in setOf(
+            "assembleRelease",
+            "bundleRelease",
+            "packageRelease",
+            "packageReleaseBundle",
+            "packageReleaseUniversalApk",
+            "makeApkFromBundleForRelease",
+            "extractApksFromBundleForRelease",
+            "signReleaseBundle",
+        )
+    ) {
+        dependsOn(verifyReleaseSigningInputs)
+        dependsOn(verifyReleasePythonPackagePack)
     }
 }
 
@@ -110,6 +187,7 @@ dependencies {
     implementation(project(":alpine-runtime-background-android"))
     implementation(project(":alpine-runtime-ui-compose"))
     implementation(project(":alpine-runtime-pack-bundled"))
+    implementation(project(":alpine-python-pack-bundled"))
     implementation(project(":alpine-workspace-api"))
     implementation(project(":alpine-workspace-android"))
     implementation(project(":codex-cli-pack"))
@@ -146,7 +224,10 @@ kotlin {
     }
 }
 
-configurations.matching { it.name.startsWith("secureDebug", ignoreCase = true) }.configureEach {
+configurations.matching {
+    it.name.startsWith("secureDebug", ignoreCase = true) ||
+        it.name.startsWith("release", ignoreCase = true)
+}.configureEach {
     exclude(group = "androidx.compose.ui", module = "ui-test-manifest")
     exclude(group = "androidx.compose.ui", module = "ui-tooling")
 }

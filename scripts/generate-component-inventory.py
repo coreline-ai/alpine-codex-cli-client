@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates a deterministic debug-only component/license/SBOM inventory asset."""
+"""Generates a deterministic distribution component/license/SBOM inventory asset."""
 
 from __future__ import annotations
 
@@ -58,26 +58,30 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--python-pack-assets", type=Path)
     return parser.parse_args()
 
 
-def generate(project_root: Path, output: Path) -> None:
+def generate(project_root: Path, output: Path, python_pack_assets: Path) -> None:
     catalog_path = project_root / "gradle/libs.versions.toml"
-    lock_path = project_root / "codex-cli-pack/codex-cli.lock.json"
+    codex_lock_path = project_root / "codex-cli-pack/codex-cli.lock.json"
     grok_lock_path = project_root / "grok-cli-pack/grok-cli.lock.json"
-    runtime_sbom_path = project_root / "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json"
+    runtime_sbom_path = (
+        project_root
+        / "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json"
+    )
     versions, libraries = read_catalog(catalog_path)
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    codex_lock = json.loads(codex_lock_path.read_text(encoding="utf-8"))
     grok_lock = json.loads(grok_lock_path.read_text(encoding="utf-8"))
 
     components: list[dict[str, str]] = [
         {
             "kind": "official-cli",
             "name": "Codex CLI",
-            "version": lock["version"],
+            "version": codex_lock["version"],
             "license": "NOASSERTION; see docs/codex-cli-notice.md",
-            "source": lock["source_url"],
-            "scope": "generated-debug-asset",
+            "source": codex_lock["source_url"],
+            "scope": "generated-app-asset",
         },
         {
             "kind": "bundled-runtime",
@@ -85,7 +89,7 @@ def generate(project_root: Path, output: Path) -> None:
             "version": "3.21.3",
             "license": "SPDX-2.3; see bundled runtime SBOM",
             "source": "alpine-runtime-pack-bundled/src/main/resources/META-INF/alpine-runtime/sbom.spdx.json",
-            "scope": "generated-debug-asset",
+            "scope": "bundled-app-asset",
         },
         {
             "kind": "official-cli",
@@ -93,7 +97,7 @@ def generate(project_root: Path, output: Path) -> None:
             "version": grok_lock["version"],
             "license": "Apache-2.0; see docs/grok-cli-notice.md",
             "source": grok_lock["source_url"],
-            "scope": "generated-debug-asset",
+            "scope": "generated-app-asset",
         },
         {
             "kind": "workspace-source",
@@ -101,24 +105,62 @@ def generate(project_root: Path, output: Path) -> None:
             "version": "workspace",
             "license": "NOASSERTION",
             "source": "codex_gateway",
-            "scope": "generated-debug-asset",
+            "scope": "generated-app-asset",
         },
     ]
+    status_path = python_pack_assets / "pack-status.json"
+    status = (
+        json.loads(status_path.read_text(encoding="utf-8"))
+        if status_path.is_file()
+        else {"schema": 1, "available": False, "reason": "local_pack_not_provided"}
+    )
+    python_sboms: list[dict[str, str]] = []
+    if status.get("available") is True:
+        python_lock_path = python_pack_assets / "python-pack.lock.json"
+        python_lock = json.loads(python_lock_path.read_text(encoding="utf-8"))
+        python_sbom_path = python_pack_assets / python_lock["sbom"]["file"]
+        components.append(
+            {
+                "kind": "bundled-runtime-packages",
+                "name": "Alpine Python package pack",
+                "version": python_lock["pack_id"],
+                "license": "SPDX-2.3; see bundled Python package SBOM",
+                "source": "alpine-python-pack/python-pack.lock.json",
+                "scope": "bundled-app-asset",
+            }
+        )
+        python_sboms.append(
+            {
+                "format": "SPDX-2.3",
+                "path": "alpine-python-pack/sbom.spdx.json",
+                "sha256": sha256(python_sbom_path),
+            }
+        )
+    else:
+        components.append(
+            {
+                "kind": "release-required-local-input",
+                "name": "Alpine Python package pack",
+                "version": "unavailable",
+                "license": "NOASSERTION",
+                "source": "ALPINE_PYTHON_PACKAGE_DIR",
+                "scope": "not-bundled-release-blocked",
+            }
+        )
     for alias, dependency in sorted(libraries.items()):
-        module = dependency["module"]
         components.append(
             {
                 "kind": "maven-direct",
-                "name": module,
+                "name": dependency["module"],
                 "version": resolved_version(dependency["version"], versions),
                 "license": "Apache-2.0",
                 "source": f"gradle/libs.versions.toml#{alias}",
-                "scope": "debug-apk-or-instrumentation",
+                "scope": "app-or-instrumentation",
             }
         )
     payload = {
-        "format": "alpine-codex-debug-component-inventory/v1",
-        "scope": "debug-only",
+        "format": "alpine-codex-component-inventory/v1",
+        "scope": "debug-secureDebug-release",
         "components": sorted(components, key=lambda item: (item["kind"], item["name"])),
         "sboms": [
             {
@@ -126,7 +168,7 @@ def generate(project_root: Path, output: Path) -> None:
                 "path": "META-INF/alpine-runtime/sbom.spdx.json",
                 "sha256": sha256(runtime_sbom_path),
             }
-        ],
+        ] + python_sboms,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -134,4 +176,13 @@ def generate(project_root: Path, output: Path) -> None:
 
 if __name__ == "__main__":
     args = parse_args()
-    generate(args.project_root.resolve(), args.output.resolve())
+    generate(
+        args.project_root.resolve(),
+        args.output.resolve(),
+        (
+            args.python_pack_assets.resolve()
+            if args.python_pack_assets is not None
+            else args.project_root.resolve()
+            / "alpine-python-pack-bundled/build/generated/distribution/assets/alpine-python-pack"
+        ),
+    )

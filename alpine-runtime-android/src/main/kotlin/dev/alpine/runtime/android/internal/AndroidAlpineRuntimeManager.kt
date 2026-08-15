@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Process
+import android.system.Os
+import android.system.OsConstants
 import dev.alpine.runtime.android.AndroidRuntimeConfiguration
 import dev.alpine.runtime.api.AlpineRuntimeManager
 import dev.alpine.runtime.api.RuntimeCommandRequest
@@ -27,6 +30,7 @@ import dev.alpine.runtime.api.RuntimeSubscription
 import dev.alpine.runtime.api.RuntimeTerminalRequest
 import dev.alpine.runtime.api.RuntimeTerminalSession
 import java.io.File
+import java.nio.file.Files
 import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
@@ -67,8 +71,23 @@ internal class AndroidAlpineRuntimeManager(
         configuration,
         ttyDiagnosticFile,
     )
+    private val privateDirectoryBinds = configuration.privateDirectoryBinds.map { configured ->
+        val noBackupRoot = appContext.noBackupFilesDir.canonicalFile
+        val host = File(noBackupRoot, configured.noBackupDirectoryName)
+        val metadata = Os.lstat(host.absolutePath)
+        check(
+            host.canonicalFile.parentFile == noBackupRoot &&
+                host.isDirectory &&
+                !Files.isSymbolicLink(host.toPath()) &&
+                metadata.st_uid == Process.myUid() &&
+                metadata.st_mode and OsConstants.S_IFMT == OsConstants.S_IFDIR &&
+                metadata.st_mode and MODE_MASK == MODE_OWNER_RWX
+        )
+        PrivateDirectoryBind(host.canonicalFile, configured.guestDirectory)
+    }
     private val launcher = ProotProcessLauncher(
         cacheDirectory = appContext.cacheDir,
+        privateDirectoryBinds = privateDirectoryBinds,
         environmentContributors = configuration.environmentContributors,
         processListener = configuration.processListener,
         maxOutputBytes = configuration.maxOutputBytes,
@@ -384,6 +403,8 @@ internal class AndroidAlpineRuntimeManager(
     }
 
     companion object {
+        private const val MODE_MASK = 0x1ff
+        private const val MODE_OWNER_RWX = 0x1c0
         private const val TTY_DIAGNOSTIC_MANIFEST_KEY =
             "dev.alpine.runtime.TTY_DIAGNOSTIC_PROBE_ENABLED"
         private const val TTY_DIAGNOSTIC_FILE_NAME = "proot-tty-diagnostic.log"

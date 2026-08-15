@@ -45,3 +45,21 @@ internal object AgentTurnAudit {
         }
     }
 }
+
+/** Emits content-free lifecycle checkpoints so a live Stop test never needs chat UI text. */
+internal object AgentTurnStateAudit {
+    private const val TAG = "AgentTurnStateAudit"
+
+    fun recordStarted(agentId: AgentId) {
+        if (agentId == AgentId.GROK) Log.i(TAG, startedLine())
+    }
+
+    fun recordStop(agentId: AgentId, dispatched: Boolean) {
+        if (agentId == AgentId.GROK) Log.i(TAG, stopLine(dispatched))
+    }
+
+    internal fun startedLine(): String = "agent=grok state=started request_bound=1"
+
+    internal fun stopLine(dispatched: Boolean): String =
+        "agent=grok state=stop_requested dispatched=${if (dispatched) 1 else 0}"
+}

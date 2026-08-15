@@ -1,68 +1,426 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
-  "spdxVersion": "SPDX-2.3",
-  "dataLicense": "CC0-1.0",
-  "name": "alpine-runtime-3.21.3-arm64",
-  "documentNamespace": "https://coreline-ai.example/spdx/alpine-runtime/3.21.3-arm64",
   "creationInfo": {
-    "created": "2026-08-02T00:00:00Z",
-    "creators": ["Tool: alpine-llm-gateway-runtime-lock"]
+    "created": "2026-08-15T00:00:00Z",
+    "creators": [
+      "Tool: alpine-codex-runtime-supply-chain-v1"
+    ]
   },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "urn:uuid:476197ac-c1f8-5bd4-9afb-083929f89444",
+  "name": "alpine-runtime-3.21.3-arm64",
   "packages": [
     {
       "SPDXID": "SPDXRef-AlpineRootfs",
-      "name": "Alpine Linux minirootfs",
-      "versionInfo": "3.21.3",
-      "downloadLocation": "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz",
-      "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
-      "copyrightText": "NOASSERTION",
       "checksums": [
         {
           "algorithm": "SHA256",
           "checksumValue": "ead8a4b37867bd19e7417dd078748e2312c0aea364403d96758d63ea8ff261ea"
         }
-      ]
+      ],
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "name": "Alpine Linux rootfs",
+      "primaryPackagePurpose": "OPERATING-SYSTEM",
+      "versionInfo": "3.21.3"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-alpine-baselayout-113b2dbeefae",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/alpine-baselayout@3.6.8-r1?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "alpine-baselayout",
+      "sourceInfo": "origin=alpine-baselayout; aports=5f0cd7890349e7fe11128478ac506c709805224d; upstream=https://git.alpinelinux.org/cgit/aports/tree/main/alpine-baselayout; apk-checksum=Q1fMzOBGrN5A2tRfD+hq90EexboUQ=",
+      "versionInfo": "3.6.8-r1"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-alpine-baselayout-data-36dd92515e33",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/alpine-baselayout-data@3.6.8-r1?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "alpine-baselayout-data",
+      "sourceInfo": "origin=alpine-baselayout; aports=5f0cd7890349e7fe11128478ac506c709805224d; upstream=https://git.alpinelinux.org/cgit/aports/tree/main/alpine-baselayout; apk-checksum=Q1YluBoF1dbOwSXQzQPPjP8CnKLb0=",
+      "versionInfo": "3.6.8-r1"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-alpine-keys-35dce3447836",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/alpine-keys@2.5-r0?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "alpine-keys",
+      "sourceInfo": "origin=alpine-keys; aports=6d473fb38effb2389f567b29fb7eb27039b3a279; upstream=https://alpinelinux.org; apk-checksum=Q1MchWO9rd+xBzdNDZBiwL1Tg9/aU=",
+      "versionInfo": "2.5-r0"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-alpine-release-6487c0ddd1d7",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/alpine-release@3.21.3-r0?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "alpine-release",
+      "sourceInfo": "origin=alpine-base; aports=899c70c801638ce9aea29a822aaa07a1488efa15; upstream=https://alpinelinux.org; apk-checksum=Q1fnZHIR6WHZWJ7LVYreAUNOR3tG8=",
+      "versionInfo": "3.21.3-r0"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-apk-tools-747f684e6cf2",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/apk-tools@2.14.6-r3?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "apk-tools",
+      "sourceInfo": "origin=apk-tools; aports=41847d6ccff08940b5bf1ba0d6005e95897039f9; upstream=https://gitlab.alpinelinux.org/alpine/apk-tools; apk-checksum=Q1CkP9a3awut9Uv8Wj9F0CqEKo7YM=",
+      "versionInfo": "2.14.6-r3"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-busybox-5b1e98b13249",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/busybox@1.37.0-r12?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "busybox",
+      "sourceInfo": "origin=busybox; aports=9c49608930ef6a9936750e9e39edec56b3db9cd5; upstream=https://busybox.net/; apk-checksum=Q14x7cdyQoSZWgyJG95ddz1MoV8uw=",
+      "versionInfo": "1.37.0-r12"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-busybox-binsh-68d899c5a513",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/busybox-binsh@1.37.0-r12?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "busybox-binsh",
+      "sourceInfo": "origin=busybox; aports=9c49608930ef6a9936750e9e39edec56b3db9cd5; upstream=https://busybox.net/; apk-checksum=Q1tKnb2Vs5sOjTMGEeq2fmONarBzA=",
+      "versionInfo": "1.37.0-r12"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-ca-certificates-bundle-092cf35bbbe1",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/ca-certificates-bundle@20241121-r1?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0 AND MIT",
+      "name": "ca-certificates-bundle",
+      "sourceInfo": "origin=ca-certificates; aports=707ff77afebd8ef5bd60f3a5dd1b08f8c480f531; upstream=https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/; apk-checksum=Q1u+wb12YGwjm/zk/SMQPFkeoY5rU=",
+      "versionInfo": "20241121-r1"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-libcrypto3-a16341807222",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/libcrypto3@3.3.3-r0?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "name": "libcrypto3",
+      "sourceInfo": "origin=openssl; aports=ddbf4a43b534e1e2da4ccb72bdc4ffcd9b85ce03; upstream=https://www.openssl.org/; apk-checksum=Q1sL2FMKlyrvWwx/5c11siZeR/v4g=",
+      "versionInfo": "3.3.3-r0"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-libssl3-c4ef622b117d",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/libssl3@3.3.3-r0?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "name": "libssl3",
+      "sourceInfo": "origin=openssl; aports=ddbf4a43b534e1e2da4ccb72bdc4ffcd9b85ce03; upstream=https://www.openssl.org/; apk-checksum=Q1BGirx6NmgyKc3o3HyW/IjhxiSig=",
+      "versionInfo": "3.3.3-r0"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-musl-2fb19d16981c",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/musl@1.2.5-r9?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "musl",
+      "sourceInfo": "origin=musl; aports=efd4d5df7be0ea48d98512671f676fc5ceb14899; upstream=https://musl.libc.org/; apk-checksum=Q1b9f8KH7RJnBrrbyrGSaTf0V8v5I=",
+      "versionInfo": "1.2.5-r9"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-musl-utils-111413654404",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/musl-utils@1.2.5-r9?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "name": "musl-utils",
+      "sourceInfo": "origin=musl; aports=efd4d5df7be0ea48d98512671f676fc5ceb14899; upstream=https://musl.libc.org/; apk-checksum=Q15J7iCIth3ZC+GVb2dQjVPpi8Rjo=",
+      "versionInfo": "1.2.5-r9"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-scanelf-9b078bdcf3be",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/scanelf@1.3.8-r1?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "scanelf",
+      "sourceInfo": "origin=pax-utils; aports=398a5aee3025ec8a4d0d761e448dc86ac777fa09; upstream=https://wiki.gentoo.org/wiki/Hardened/PaX_Utilities; apk-checksum=Q1wtXOtXltlxMn8m9w3LuCiDFGGQY=",
+      "versionInfo": "1.3.8-r1"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-ssl-client-ec6f439f0061",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/ssl_client@1.37.0-r12?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-only",
+      "name": "ssl_client",
+      "sourceInfo": "origin=busybox; aports=9c49608930ef6a9936750e9e39edec56b3db9cd5; upstream=https://busybox.net/; apk-checksum=Q1Vf152/NhxT0U+MgLHROvUpE0Esw=",
+      "versionInfo": "1.37.0-r12"
+    },
+    {
+      "SPDXID": "SPDXRef-AlpinePackage-zlib-7a0ffd3cece4",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:apk/alpine/zlib@1.3.1-r2?arch=aarch64",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Zlib",
+      "name": "zlib",
+      "sourceInfo": "origin=zlib; aports=4c2722e7ecc1c5e3ba882429044a101497121223; upstream=https://zlib.net/; apk-checksum=Q1ZEtAcwgZopzoL/lwkvjL8KcMEVo=",
+      "versionInfo": "1.3.1-r2"
     },
     {
       "SPDXID": "SPDXRef-PRoot",
-      "name": "OpenMinis PRoot Android fork",
-      "versionInfo": "8cf13e997cdc9472997aae19df8050c073c9a86c",
-      "downloadLocation": "https://github.com/OpenMinis/proot",
-      "sourceInfo": "OpenMinis commit 8cf13e997cdc9472997aae19df8050c073c9a86c; no local PRoot patches",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "5d2959c3a58f82609c8b95a92496835099a96faa8efc12f68e171a3597b5bc29"
+        }
+      ],
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "GPL-2.0-or-later",
-      "copyrightText": "NOASSERTION",
-      "comment": "Source grant verified as GPL-2.0-or-later. The packaged PRoot executable statically links talloc; the combined binary conclusion remains under review."
+      "name": "OpenMinis PRoot Android fork",
+      "versionInfo": "8cf13e997cdc9472997aae19df8050c073c9a86c"
     },
     {
-      "SPDXID": "SPDXRef-Talloc",
-      "name": "talloc",
-      "versionInfo": "2.4.2",
-      "downloadLocation": "https://download.samba.org/pub/talloc/talloc-2.4.2.tar.gz",
+      "SPDXID": "SPDXRef-PRootLoader",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "12d2b63e897fd91a334fce23edea5d2419cae4d5fd2a369f05d03ab75682add0"
+        }
+      ],
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
-      "licenseConcluded": "LGPL-3.0-or-later",
-      "licenseDeclared": "LGPL-3.0-or-later",
-      "copyrightText": "NOASSERTION"
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-or-later AND LGPL-3.0-or-later",
+      "name": "OpenMinis PRoot loader",
+      "versionInfo": "8cf13e997cdc9472997aae19df8050c073c9a86c"
     }
   ],
   "relationships": [
     {
-      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-AlpineRootfs",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-AlpineRootfs"
+      "spdxElementId": "SPDXRef-DOCUMENT"
     },
     {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-PRoot"
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-alpine-baselayout-113b2dbeefae",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
     },
     {
-      "spdxElementId": "SPDXRef-PRoot",
-      "relationshipType": "STATIC_LINK",
-      "relatedSpdxElement": "SPDXRef-Talloc"
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-alpine-baselayout-data-36dd92515e33",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-alpine-keys-35dce3447836",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-alpine-release-6487c0ddd1d7",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-apk-tools-747f684e6cf2",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-busybox-5b1e98b13249",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-busybox-binsh-68d899c5a513",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-ca-certificates-bundle-092cf35bbbe1",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-libcrypto3-a16341807222",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-libssl3-c4ef622b117d",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-musl-2fb19d16981c",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-musl-utils-111413654404",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-scanelf-9b078bdcf3be",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-ssl-client-ec6f439f0061",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-AlpinePackage-zlib-7a0ffd3cece4",
+      "relationshipType": "CONTAINS",
+      "spdxElementId": "SPDXRef-AlpineRootfs"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-PRoot",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-PRootLoader",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
     }
-  ]
+  ],
+  "spdxVersion": "SPDX-2.3"
 }

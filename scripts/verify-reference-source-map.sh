@@ -1,12 +1,19 @@
 #!/bin/sh
 set -eu
 
-source_repo=${1:-/Volumes/ExternalSSD/projects_8/alpine-llm-gateway}
+project_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+source_repo=${1:-${ALPINE_REFERENCE_REPO:-$project_root/../../project_202607/alpine-llm-gateway}}
+source_commit=${2:-${ALPINE_REFERENCE_COMMIT:-b81a7d8ee12af72ff95180bfeadabe68e5be950e}}
+
+if ! git -C "$source_repo" cat-file -e "$source_commit^{commit}" 2>/dev/null; then
+    printf '%s\n' "immutable reference commit is unavailable: $source_commit" >&2
+    exit 1
+fi
 
 check_file() {
     relative_path=$1
     expected_sha=$2
-    actual_sha=$(shasum -a 256 "$source_repo/$relative_path" | awk '{print $1}')
+    actual_sha=$(git -C "$source_repo" show "$source_commit:$relative_path" | shasum -a 256 | awk '{print $1}')
     if [ "$actual_sha" != "$expected_sha" ]; then
         printf '%s\n' "reference hash mismatch: $relative_path" >&2
         exit 1
@@ -27,9 +34,10 @@ check_file alpine-workspace-api/build.gradle.kts 08ff0bfada62181e8cd0edaf8488089
 check_file alpine-workspace-android/build.gradle.kts f936cb61cb87d6206d57e11b38c38b8920914b41f6559d41e1e45ccc5fa13034
 check_file alpine-chat-routing/build.gradle.kts a9f8a977a272d0a978b16436b456e1cd08df4770200d4522c59ca98b6cdb4438
 check_file alpine-chat-feature/build.gradle.kts a0b7e92268fc45defd7a2818509503ff6d4d2eb82bd5b77918f8e989d412a17d
-check_file alpine-chat-feature/src/main/java/dev/alpine/chat/feature/ui/ChatViewModel.kt 890cd820b3eef5a8a1daa3b378f17a188f6dbd7ad1a254680fc1796e84fbd070
-check_file alpine-chat-feature/src/main/java/dev/alpine/chat/feature/ui/designsystem/AlpineProductComponents.kt 522f8c06c80a86716f9f4c0e93f49ce587a7e61f5f0642e9ca86afef3eaf0fb9
-check_file alpine-chat-feature/src/main/java/dev/alpine/chat/feature/ui/screens/chat/AlpineChatScreen.kt e8c9eb326ba3b25ceca58f35a638e22ce5288a20a8c3a5999698a9c5700187f8
-check_file alpine-chat-feature/src/test/java/dev/alpine/chat/feature/ui/ChatGenerationStateTest.kt f7376c8f8f5e9eead6f03f1668fe4f3e7f794d121f497785f4d2bea09d529dcb
+
+# The four UI files in the document's "Dirty UI snapshot" are historical review evidence and
+# explicitly marked `not imported`. They were never a reproducible clean Git baseline, so a live
+# reference checkout may legitimately change them. Only the configuration/import allowlist above
+# and the separate runtime reference manifest are executable source-integrity gates.
 
 printf '%s\n' "reference source map: PASS"

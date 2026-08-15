@@ -121,6 +121,23 @@ class GatewayHttpTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             LoopbackGatewayServer(("0.0.0.0", 0), make_handler(harness.service))
 
+    def test_closed_loopback_port_is_reclaimable_but_live_collision_fails(self):
+        harness = self.open("normal")
+        status, _ = harness.request("GET", "/healthz")
+        self.assertEqual(200, status)
+        port = harness.port
+
+        with self.assertRaises(OSError):
+            LoopbackGatewayServer((LOOPBACK_HOST, port), make_handler(harness.service))
+
+        harness.close()
+        self.harness = None
+        rebound = LoopbackGatewayServer((LOOPBACK_HOST, port), make_handler(harness.service))
+        try:
+            self.assertTrue(rebound.allow_reuse_address)
+        finally:
+            rebound.server_close()
+
     def test_login_pending_completed_cancel_expiry_and_duplicate(self):
         harness = self.open("gateway_login_complete")
         status, started = harness.request("POST", "/internal/codex/login/device")

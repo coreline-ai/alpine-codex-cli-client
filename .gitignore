@@ -11,7 +11,9 @@ local.properties
 *.ap_
 *.keystore
 *.jks
+*.ks
 *.p12
+*.pfx
 *.pem
 *.key
 

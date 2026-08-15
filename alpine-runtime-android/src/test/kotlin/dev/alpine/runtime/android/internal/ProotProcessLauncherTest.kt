@@ -22,13 +22,97 @@ class ProotProcessLauncherTest {
     val temporaryFolder = TemporaryFolder()
 
     @Test
+    fun `factory private directories bind only to empty fixed workspace mount points`() {
+        val base = temporaryFolder.newFolder("private-binds")
+        val argumentsFile = File(base, "arguments.txt")
+        val fakeLauncher = File(base, "libproot.so").apply {
+            writeText("#!/bin/sh\nprintf '%s\\n' \"\$@\" > '${argumentsFile.absolutePath}'\nexit 0\n")
+            setExecutable(true)
+        }
+        val runtime = InstalledRuntime(
+            runtimeId = "alpine",
+            runtimeVersion = "test",
+            abi = "arm64-v8a",
+            rootfsDirectory = File(base, "rootfs").apply { mkdirs() },
+            workspaceDirectory = File(base, "workspace").apply { mkdirs() },
+            launcher = fakeLauncher,
+            loader = File(base, "libproot-loader.so").apply { writeText("test") },
+        )
+        val codexHome = File(base, "no-backup-codex").apply { mkdirs() }.canonicalFile
+        val grokHome = File(base, "no-backup-grok").apply { mkdirs() }.canonicalFile
+        val launcher = ProotProcessLauncher(
+            cacheDirectory = File(base, "cache"),
+            privateDirectoryBinds = listOf(
+                PrivateDirectoryBind(codexHome, "/workspace/.alpine-codex/home"),
+                PrivateDirectoryBind(grokHome, "/workspace/.alpine-grok/home"),
+            ),
+            environmentContributors = emptyList(),
+            processListener = RuntimeHostProcessListener { },
+            maxOutputBytes = 1024,
+        )
+        launcher.openSession("session")
+
+        val result = launcher.execute(
+            runtime,
+            "session",
+            emptyMap(),
+            RuntimeCommandRequest(executable = "/bin/true"),
+        )
+
+        assertEquals(0, result.exitCode)
+        val arguments = argumentsFile.readLines()
+        assertTrue(arguments.windowed(2).contains(listOf("-b", "${codexHome.absolutePath}:/workspace/.alpine-codex/home")))
+        assertTrue(arguments.windowed(2).contains(listOf("-b", "${grokHome.absolutePath}:/workspace/.alpine-grok/home")))
+        assertTrue(File(runtime.workspaceDirectory, ".alpine-codex/home").isDirectory)
+        assertTrue(File(runtime.workspaceDirectory, ".alpine-grok/home").isDirectory)
+    }
+
+    @Test
+    fun `private bind refuses to hide legacy workspace state`() {
+        val base = temporaryFolder.newFolder("private-bind-hidden-state")
+        val runtime = InstalledRuntime(
+            runtimeId = "alpine",
+            runtimeVersion = "test",
+            abi = "arm64-v8a",
+            rootfsDirectory = File(base, "rootfs").apply { mkdirs() },
+            workspaceDirectory = File(base, "workspace").apply { mkdirs() },
+            launcher = File(base, "libproot.so"),
+            loader = File(base, "libproot-loader.so"),
+        )
+        File(runtime.workspaceDirectory, ".alpine-codex/home").apply {
+            mkdirs()
+            File(this, "auth.json").writeText("fixture")
+        }
+        val host = File(base, "no-backup-codex").apply { mkdirs() }.canonicalFile
+        val launcher = ProotProcessLauncher(
+            cacheDirectory = File(base, "cache"),
+            privateDirectoryBinds = listOf(
+                PrivateDirectoryBind(host, "/workspace/.alpine-codex/home"),
+            ),
+            environmentContributors = emptyList(),
+            processListener = RuntimeHostProcessListener { },
+            maxOutputBytes = 1024,
+        )
+        launcher.openSession("session")
+
+        assertThrows(IllegalStateException::class.java) {
+            launcher.execute(
+                runtime,
+                "session",
+                emptyMap(),
+                RuntimeCommandRequest(executable = "/bin/true"),
+            )
+        }
+    }
+
+    @Test
     fun `reserved host environment is rejected without being remapped to process failure`() {
         val base = temporaryFolder.newFolder("runtime")
         val runtime = InstalledRuntime(
             runtimeId = "alpine",
             runtimeVersion = "test",
             abi = "arm64-v8a",
-            rootfsDirectory = File(base, "rootfs"),
+            rootfsDirectory = File(base, "rootfs").apply { mkdirs() },
             workspaceDirectory = File(base, "workspace").apply { mkdirs() },
             launcher = File(base, "libproot.so"),
             loader = File(base, "libproot-loader.so"),
@@ -67,7 +151,7 @@ class ProotProcessLauncherTest {
             runtimeId = "alpine",
             runtimeVersion = "test",
             abi = "arm64-v8a",
-            rootfsDirectory = File(base, "rootfs"),
+            rootfsDirectory = File(base, "rootfs").apply { mkdirs() },
             workspaceDirectory = File(base, "workspace").apply { mkdirs() },
             launcher = File(base, "libproot.so"),
             loader = File(base, "libproot-loader.so"),
@@ -123,7 +207,7 @@ class ProotProcessLauncherTest {
             runtimeId = "alpine",
             runtimeVersion = "test",
             abi = "arm64-v8a",
-            rootfsDirectory = File(base, "rootfs"),
+            rootfsDirectory = File(base, "rootfs").apply { mkdirs() },
             workspaceDirectory = File(base, "workspace").apply { mkdirs() },
             launcher = File(base, "libproot.so"),
             loader = File(base, "libproot-loader.so"),

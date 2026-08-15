@@ -31,6 +31,14 @@ data class AndroidRuntimeConfiguration @JvmOverloads constructor(
     val maxRootfsEntries: Int = 100_000,
     val maxNativeArtifactBytes: Long = 64L * 1024 * 1024,
     /**
+     * Fixed host configuration for app-private state that Android must exclude from backup/D2D.
+     *
+     * Each host directory is resolved as one direct child of [Context.getNoBackupFilesDir]. Guest
+     * paths must be fixed `/workspace/...` directories. Runtime requests cannot add or change
+     * binds, and the Android adapter rejects symlinks, duplicate targets, and non-private modes.
+     */
+    val privateDirectoryBinds: List<AndroidPrivateDirectoryBind> = emptyList(),
+    /**
      * Probe-only switch for a PRoot ioctl topology investigation.
      *
      * The Android adapter additionally requires a debuggable app and a matching
@@ -107,6 +115,15 @@ data class AndroidRuntimeConfiguration @JvmOverloads constructor(
         require(maxRootfsExtractedBytes > 0) { "maxRootfsExtractedBytes must be positive" }
         require(maxRootfsEntries > 0) { "maxRootfsEntries must be positive" }
         require(maxNativeArtifactBytes > 0) { "maxNativeArtifactBytes must be positive" }
+        require(privateDirectoryBinds.size <= MAX_PRIVATE_DIRECTORY_BINDS) {
+            "too many private directory binds"
+        }
+        require(privateDirectoryBinds.map { it.noBackupDirectoryName }.distinct().size == privateDirectoryBinds.size) {
+            "duplicate private host directory"
+        }
+        require(privateDirectoryBinds.map { it.guestDirectory }.distinct().size == privateDirectoryBinds.size) {
+            "duplicate private guest directory"
+        }
         require(!disableProotSeccompForTtyDiagnostic || enableTtyIoctlDiagnostics) {
             "disableProotSeccompForTtyDiagnostic requires enableTtyIoctlDiagnostics"
         }
@@ -151,7 +168,30 @@ data class AndroidRuntimeConfiguration @JvmOverloads constructor(
     }
 
     private companion object {
+        const val MAX_PRIVATE_DIRECTORY_BINDS = 4
         val SAFE_NATIVE_LIBRARY_FILE_NAME = Regex("lib[A-Za-z0-9_.-]+\\.so")
+    }
+}
+
+data class AndroidPrivateDirectoryBind(
+    val noBackupDirectoryName: String,
+    val guestDirectory: String,
+) {
+    init {
+        require(noBackupDirectoryName.matches(SAFE_DIRECTORY_NAME)) {
+            "private host directory must be one fixed name"
+        }
+        require(guestDirectory.matches(SAFE_GUEST_DIRECTORY)) {
+            "private guest directory is invalid"
+        }
+        require(guestDirectory != "/workspace" && !guestDirectory.startsWith("/workspace/.alpine-runtime/")) {
+            "private guest directory overlaps Runtime control state"
+        }
+    }
+
+    private companion object {
+        val SAFE_DIRECTORY_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
+        val SAFE_GUEST_DIRECTORY = Regex("/workspace/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
     }
 }
 

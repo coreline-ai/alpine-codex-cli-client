@@ -12,6 +12,7 @@ from unittest import mock
 
 from codex_gateway.grok_acp.contract import (
     AUTH_METHOD_ID,
+    CACHED_TOKEN_AUTH_METHOD_ID,
     NOTIFICATION_METHODS,
     REQUEST_METHODS,
     _RequestMethod,
@@ -27,6 +28,7 @@ from codex_gateway.grok_acp.rpc import (
     AcpPendingLimit,
     AcpProcessLost,
     AcpProtocolError,
+    AcpRemoteError,
     AcpStopped,
     AcpTimeout,
     _AcpMultiplexer,
@@ -62,6 +64,31 @@ class GrokContractTest(unittest.TestCase):
         self.assertTrue(normalized.can_close_session)
         self.assertFalse(hasattr(normalized, "mcp_capabilities"))
 
+    def test_initialize_accepts_only_the_official_persisted_oauth_method_shape(self):
+        fixture = json.loads(FIXTURE_PATH.read_text())
+        result = fixture["initializeResult"]
+        result["authMethods"].insert(
+            0,
+            {"name": "cached_token", "id": CACHED_TOKEN_AUTH_METHOD_ID},
+        )
+        result["_meta"]["defaultAuthMethodId"] = CACHED_TOKEN_AUTH_METHOD_ID
+
+        normalized = parse_initialize_result(result)
+
+        self.assertEqual(CACHED_TOKEN_AUTH_METHOD_ID, normalized.auth_method_id)
+        for invalid_ids in (
+            ("xai.api_key", AUTH_METHOD_ID),
+            (AUTH_METHOD_ID, CACHED_TOKEN_AUTH_METHOD_ID),
+            (CACHED_TOKEN_AUTH_METHOD_ID,),
+        ):
+            with self.subTest(invalid_ids=invalid_ids):
+                invalid = json.loads(FIXTURE_PATH.read_text())["initializeResult"]
+                invalid["authMethods"] = [
+                    {"name": method_id, "id": method_id} for method_id in invalid_ids
+                ]
+                with self.assertRaises(ValueError):
+                    parse_initialize_result(invalid)
+
     def test_contract_is_closed_and_forbidden_strings_never_reach_writer(self):
         fixture = json.loads(FIXTURE_PATH.read_text())
         self.assertEqual(set(fixture["allowedRequestMethods"]), set(REQUEST_METHODS))
@@ -76,6 +103,83 @@ class GrokContractTest(unittest.TestCase):
 
 
 class GrokMultiplexerTest(unittest.TestCase):
+    def test_remote_error_retains_only_bounded_numeric_code(self):
+        writes = []
+        rpc = _AcpMultiplexer(writes.append, generation=2)
+        errors = []
+
+        def request():
+            try:
+                rpc.request(_RequestMethod.SESSION_NEW, {}, 1.0)
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=request)
+        thread.start()
+        while len(writes) != 1:
+            time.sleep(0.005)
+        rpc.handle_object(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32603,
+                    "message": "private remote detail",
+                    "data": {
+                        "code": "FS_PERMISSION_DENIED",
+                        "detail": "/private/account/path",
+                    },
+                },
+            },
+            generation=2,
+        )
+        thread.join(1.0)
+
+        self.assertEqual(1, len(errors))
+        self.assertIsInstance(errors[0], AcpRemoteError)
+        self.assertEqual(-32603, errors[0].remote_code)
+        self.assertEqual("FS_PERMISSION_DENIED", errors[0].remote_category)
+        self.assertNotIn("private", str(errors[0]))
+        self.assertNotIn("path", str(errors[0]))
+
+    def test_remote_error_classifies_session_runtime_build_without_retaining_detail(self) -> None:
+        writes = []
+        rpc = _AcpMultiplexer(writes.append, generation=1)
+        errors = []
+
+        def request():
+            try:
+                rpc.request(_RequestMethod.SESSION_NEW, {}, 1.0)
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=request)
+        thread.start()
+        while len(writes) != 1:
+            time.sleep(0.005)
+        rpc.handle_object(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32603,
+                    "message": "Internal error",
+                    "data": (
+                        "session initialization failed: failed to build session runtime: "
+                        "private resource detail"
+                    ),
+                },
+            },
+            generation=1,
+        )
+        thread.join(timeout=1)
+
+        self.assertEqual(1, len(errors))
+        self.assertIsInstance(errors[0], AcpRemoteError)
+        self.assertEqual("SESSION_AGENT_RUNTIME_BUILD_FAILED", errors[0].remote_category)
+        self.assertNotIn("private", str(errors[0]))
+        self.assertNotIn("resource", str(errors[0]))
+
     def test_request_ids_are_monotonic_and_late_response_is_rejected(self):
         writes = []
         rpc = _AcpMultiplexer(writes.append, generation=2)
@@ -253,6 +357,13 @@ class GrokSupervisorTest(unittest.TestCase):
             self.assertEqual(GrokSupervisorState.READY, self.supervisor.state)
             self.supervisor.stop()
 
+    def test_persisted_oauth_is_eagerly_authenticated_before_ready(self):
+        state = self.start("cached_auth")
+
+        self.assertEqual(CACHED_TOKEN_AUTH_METHOD_ID, state.auth_method_id)
+        self.assertEqual(CACHED_TOKEN_AUTH_METHOD_ID, self.supervisor.authenticated_method_id)
+        self.assertEqual(GrokSupervisorState.READY, self.supervisor.state)
+
     def test_fixture_spawn_keeps_closed_descriptors_without_preexec_fn(self):
         real_popen = subprocess.Popen
         with mock.patch(
@@ -380,9 +491,17 @@ class GrokSupervisorTest(unittest.TestCase):
         self.assertEqual(1, len(terminal))
         self.assertEqual(sorted(n.sequence for n in notifications), [n.sequence for n in notifications])
 
+    def test_session_new_uses_only_the_documented_acp_fields(self):
+        self.start()
+        self.assertEqual(
+            {"sessionId": "session-1"},
+            self.supervisor.new_session(ROOT.as_posix()),
+        )
+
     def test_authenticate_uses_scoped_sequence_without_forcing_loopback_oauth(self):
         self.start()
         self.assertEqual({}, self.supervisor.authenticate(17))
+        self.assertEqual(AUTH_METHOD_ID, self.supervisor.authenticated_method_id)
         with self.assertRaises(ValueError):
             self.supervisor.authenticate(0)
         with self.assertRaises(ValueError):

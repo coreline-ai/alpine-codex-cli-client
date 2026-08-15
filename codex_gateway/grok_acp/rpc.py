@@ -11,6 +11,31 @@ from typing import Any, Callable, Deque, Dict, Optional, Set
 from .contract import NOTIFICATION_METHODS, TERMINAL_NOTIFICATION_METHOD, _RequestMethod
 
 
+# Closed, content-free categories emitted by the pinned CLI's persistence boundary. The adjacent
+# human-readable ``message`` and ``detail`` values are deliberately never retained.
+REMOTE_ERROR_CATEGORIES = frozenset(
+    {
+        "FS_DISK_QUOTA_EXCEEDED",
+        "FS_NOT_FOUND",
+        "FS_PERMISSION_DENIED",
+        "FS_OTHER",
+        "SESSION_AGENT_CONFIG_INVALID",
+        "SESSION_AGENT_IO_FAILED",
+        "SESSION_AGENT_MISSING_FIELD",
+        "SESSION_AGENT_PARSE_FAILED",
+        "SESSION_AGENT_RUNTIME_BUILD_FAILED",
+        "SESSION_AGENT_TEMPLATE_FAILED",
+        "SESSION_AGENT_TOOL_FAILED",
+        "SESSION_AGENT_UNKNOWN_TOOL_OVERRIDE",
+        "SESSION_DIR_FAILED",
+        "SESSION_INITIALIZATION_FAILED",
+        "SESSION_THREAD_PANIC",
+        "SESSION_THREAD_SPAWN_FAILED",
+        "WORKSPACE_INIT_FAILED",
+    }
+)
+
+
 class AcpError(RuntimeError):
     code = "grok_acp_error"
 
@@ -41,6 +66,18 @@ class AcpStopped(AcpError):
 
 class AcpRemoteError(AcpError):
     code = "grok_acp_remote_error"
+
+    def __init__(
+        self,
+        remote_code: Optional[int] = None,
+        remote_category: Optional[str] = None,
+    ) -> None:
+        # Retain only the bounded JSON-RPC integer discriminator and one closed upstream category.
+        # Remote message/detail fields may contain provider, account, request, path, or prompt
+        # material and are always discarded.
+        self.remote_code = remote_code
+        self.remote_category = remote_category if remote_category in REMOTE_ERROR_CATEGORIES else None
+        super().__init__()
 
 
 @dataclass(frozen=True)
@@ -308,7 +345,18 @@ class _AcpMultiplexer:
                 else:
                     pending.result = dict(result)
             else:
-                pending.error = AcpRemoteError()
+                remote = message.get("error")
+                remote_code = remote.get("code") if isinstance(remote, dict) else None
+                if (
+                    not isinstance(remote_code, int)
+                    or isinstance(remote_code, bool)
+                    or remote_code < -99999
+                    or remote_code > 99999
+                ):
+                    remote_code = None
+                remote_data = remote.get("data") if isinstance(remote, dict) else None
+                remote_category = _remote_error_category(remote_data)
+                pending.error = AcpRemoteError(remote_code, remote_category)
             pending.event.set()
 
     def _accept_terminal(self, params: Dict[str, Any]) -> bool:
@@ -351,6 +399,62 @@ def _encode_notification(method: str, params: Dict[str, Any]) -> bytes:
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8") + b"\n"
+
+
+def _remote_error_category(data: Any) -> Optional[str]:
+    if isinstance(data, dict):
+        value = data.get("code")
+        return value if value in REMOTE_ERROR_CATEGORIES else None
+    if not isinstance(data, str) or len(data) > 4096:
+        return None
+    if data.startswith("failed to spawn session thread:"):
+        return "SESSION_THREAD_SPAWN_FAILED"
+    if data == "session thread panicked during initialization":
+        return "SESSION_THREAD_PANIC"
+    initialization_categories = (
+        (
+            "session initialization failed: failed to build session runtime:",
+            "SESSION_AGENT_RUNTIME_BUILD_FAILED",
+        ),
+        (
+            "session initialization failed: failed to parse agent definition:",
+            "SESSION_AGENT_PARSE_FAILED",
+        ),
+        (
+            "session initialization failed: missing required field in agent definition:",
+            "SESSION_AGENT_MISSING_FIELD",
+        ),
+        (
+            "session initialization failed: tool name override references nonexistent tool",
+            "SESSION_AGENT_UNKNOWN_TOOL_OVERRIDE",
+        ),
+        (
+            "session initialization failed: IO error during agent construction:",
+            "SESSION_AGENT_IO_FAILED",
+        ),
+        (
+            "session initialization failed: template rendering error:",
+            "SESSION_AGENT_TEMPLATE_FAILED",
+        ),
+        (
+            "session initialization failed: tool error:",
+            "SESSION_AGENT_TOOL_FAILED",
+        ),
+        (
+            "session initialization failed: invalid configuration:",
+            "SESSION_AGENT_CONFIG_INVALID",
+        ),
+    )
+    for prefix, category in initialization_categories:
+        if data.startswith(prefix):
+            return category
+    if data.startswith("session initialization failed:"):
+        return "SESSION_INITIALIZATION_FAILED"
+    if data.startswith("failed to create session dir:"):
+        return "SESSION_DIR_FAILED"
+    if data.startswith("Local workspace initialization failed; cannot create session."):
+        return "WORKSPACE_INIT_FAILED"
+    return None
 
 
 def _profile_event_category(method: Any, params: Any) -> Optional[str]:

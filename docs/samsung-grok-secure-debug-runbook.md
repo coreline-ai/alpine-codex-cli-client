@@ -1,13 +1,23 @@
 # Samsung Grok secure-debug runbook
 
-Date: `2026-08-14 KST`
+Date: `2026-08-15 KST`
 
 This runbook is the only approved real-account path for Phase 9. It never uninstalls the target app,
 clears app data, copies credential files, or reads OAuth/account payloads.
 
+## Verified baseline
+
+- Sections 1-6 completed on the approved Samsung target on `2026-08-15 KST`.
+- Final candidate: `161150250` bytes; SHA-256
+  `d104be3f1d3e6aff21953356fe41e45e1e30bd2ca3832406f82783cc407ca769`.
+- Credential-free milestone: 116 Python tests and 516 Gradle tasks plus protocol, clean-room,
+  artifact, profile, ACP, APK, evidence, source-map, and Runtime-manifest gates passed.
+- Section 7 remains unexecuted because logout and Runtime shutdown require separate approval.
+
 ## 1. Credential-free gate
 
-1. Confirm the worktree is on `codex/implement-grok-agent` and review unrelated changes.
+1. Confirm the expected branch/HEAD and review the cumulative working tree without reset, stash,
+   rebase, or checkout of unrelated changes.
 2. Run `sh scripts/verify-secure-debug-milestone.sh`.
 3. Confirm the secure APK is debug-signed, non-debuggable, and has application ID
    `dev.alpine.codexclient.debug`.
@@ -18,7 +28,10 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 
 1. Update-install only `app/build/outputs/apk/secureDebug/app-secureDebug.apk` on the exact target.
 2. Do not use uninstall, clear-data, release tasks, store keys, or the lab package for real OAuth.
-3. In the app, run the explicit sequence `Alpine 시작 -> Gateway Python 준비 -> Gateway 시작`.
+3. Bring the app to the foreground. The configured state automatically restores the fixed
+   `Runtime install/repair -> Alpine -> Gateway Python check -> Gateway` chain. The app performs
+   one settled retry after the 30-second Gateway timeout boundary; do not tap repeatedly.
+   An explicit `Runtime 종료` persists opt-out until `Runtime · Gateway 시작` is tapped again.
 4. Require authenticated Gateway readiness before selecting Grok.
 5. Select Grok and confirm Codex is idle and only the Grok ACP process is active.
 
@@ -52,11 +65,17 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 ## 5. Separate Stop turn
 
 1. Enter one separate non-sensitive request expected to stream long enough for Stop.
-2. Press Send once, then Stop once after generation begins.
-3. Pipe exactly the new dedicated audit line to
+2. Press Send once, wait for the content-free request-bound `AgentTurnStateAudit` `started`
+   checkpoint, then press Stop once.
+3. Require exactly one `stop_requested dispatched=1` state checkpoint. A missing or duplicate
+   checkpoint is a failure; do not retry the prompt.
+4. Pipe exactly the new dedicated terminal audit line to
    `python3 scripts/verify-agent-turn-audit.py --mode stop`. Success requires one terminal state,
    `prompt_dispatch=1`, `cancel=1`, no automatic replay, all profile counters `0`, and only the G1
    pre-output retry classification if a CLI-internal retry occurred.
+5. An accepted `session/cancel` must publish one `turn_interrupted` terminal immediately. The
+   official CLI may leave the old prompt RPC open; any late prompt/notification result must be
+   ignored and must not create a second terminal.
 
 ## 6. Lifecycle and Agent regression
 
@@ -77,4 +96,5 @@ clears app data, copies credential files, or reads OAuth/account payloads.
    `docs/samsung-grok-secure-debug-e2e.md`, rerun the evidence scanner, and never commit captures or
    logs.
 
-현재 실행 기준선과 Git 상태는 `docs/grok-phase9-handoff.md`를 따른다.
+현재 실행 기준선과 Git 상태는 `docs/grok-phase9-handoff.md`를 따른다. 완료 근거는
+`docs/samsung-grok-secure-debug-e2e.md`에 redacted count와 enum으로만 기록한다.

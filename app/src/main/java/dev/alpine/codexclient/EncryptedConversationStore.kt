@@ -43,10 +43,15 @@ internal data class StoredConversationState(
  * Stores only locally rendered messages and the opaque conversation selector. OAuth data, login
  * challenges, account fields, and gateway thread IDs deliberately never enter this store.
  */
-internal class EncryptedConversationStore(context: Context) {
+internal class EncryptedConversationStore(
+    context: Context,
+    storageDirectory: File = (context.applicationContext as? AlpineCodexApplication)
+        ?.conversationStateDirectory
+        ?: context.noBackupFilesDir,
+) {
     private val applicationId = context.packageName
-    private val file = File(context.filesDir, FILE_NAME_V2)
-    private val legacyFile = File(context.filesDir, FILE_NAME_V1)
+    private val file = File(storageDirectory, FILE_NAME_V2)
+    private val legacyFile = File(storageDirectory, FILE_NAME_V1)
     @Volatile private var lastWriteFailureCode: String? = null
 
     fun load(): StoredConversationState? {

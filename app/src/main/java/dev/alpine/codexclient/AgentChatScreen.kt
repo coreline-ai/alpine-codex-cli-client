@@ -66,7 +66,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.alpine.codexclient.bridge.AgentId
 import dev.alpine.codexclient.ui.components.AlpinePanel
 import dev.alpine.codexclient.ui.components.AlpineSectionHeader
@@ -103,6 +106,15 @@ internal fun AlpineAgentClientApp(
     var showOverflow by remember { mutableStateOf(false) }
     var showLogoutConfirmation by rememberSaveable { mutableStateOf(false) }
     var pendingAgentSwitch by remember { mutableStateOf<AgentId?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner, chatViewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) chatViewModel.onHostResumed()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     LaunchedEffect(chatViewModel) {
         chatViewModel.browserLaunches.collect { request ->
@@ -1001,7 +1013,7 @@ internal fun AgentDeviceLoginSheet(
                     padding = PaddingValues(14.dp),
                 ) {
                     Text(
-                        text = "공식 xAI 인증 페이지를 열었습니다. 브라우저에서 승인한 뒤 이 화면으로 돌아오세요.",
+                        text = "공식 xAI 인증 페이지를 열었습니다. 승인을 마치고 앱으로 돌아오면 연결 상태를 즉시 다시 확인합니다.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

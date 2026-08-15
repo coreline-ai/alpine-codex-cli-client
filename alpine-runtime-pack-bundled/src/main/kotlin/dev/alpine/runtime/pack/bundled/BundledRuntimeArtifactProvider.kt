@@ -162,7 +162,7 @@ object Alpine321Arm64Pack {
                     RuntimeArtifactMetadataKeys.SBOM_PATH to
                         "META-INF/alpine-runtime/sbom.spdx.json",
                     RuntimeArtifactMetadataKeys.SBOM_SHA256 to
-                        "678ed604a09a22d5e63c3f2289225de0a85b7c868f05e78817f7a54e4d1d42bc",
+                        "f9e0842e72e5a3ff35a89ec1d46ced293844d5538de0df1a5a5dfa4134947b89",
                     RuntimeArtifactMetadataKeys.SOURCE_REVISION to
                         "proot:8cf13e997cdc9472997aae19df8050c073c9a86c;" +
                             "local-patches:none;alpine:3.21.3",

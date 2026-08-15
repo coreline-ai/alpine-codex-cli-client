@@ -26,10 +26,10 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
-    // The locked executable exists only in the debug AAR assets. No release source set or
-    // signing configuration is created by this module.
+    // Every app variant consumes the same checksum-pinned executable. The binary is generated
+    // from a verified local cache or the exact official lock URL and is never tracked in Git.
     sourceSets {
-        getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/debug/assets"))
+        getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/distribution/assets"))
     }
 
     androidResources {
@@ -225,13 +225,13 @@ fun copyAtomically(source: File, target: File) {
     )
 }
 
-val generatedAssetsDirectory = layout.buildDirectory.dir("generated/debug/assets/codex-cli")
+val generatedAssetsDirectory = layout.buildDirectory.dir("generated/distribution/assets/codex-cli")
 val lockFile = layout.projectDirectory.file("codex-cli.lock.json")
 val configuredArchive = providers.environmentVariable("CODEX_CLI_ARCHIVE_PATH")
 
-val prepareCodexCliDebug by tasks.registering {
+val prepareCodexCliAssets by tasks.registering {
     group = "build setup"
-    description = "Prepares the checksum-pinned official Codex CLI as a debug-only Android asset."
+    description = "Prepares the checksum-pinned official Codex CLI for Android app variants."
     inputs.file(lockFile)
     inputs.property("configuredCodexCliArchive", configuredArchive.orNull ?: "")
     outputs.dir(generatedAssetsDirectory)
@@ -295,13 +295,14 @@ val prepareCodexCliDebug by tasks.registering {
     }
 }
 
-// AGP 8.10 does not expose a preDebugBuild task for this library. Attach only to
-// debug consumers of the generated asset; release variants neither invoke this
-// task nor consume this source dir. Lint reads the debug asset source set when it
-// builds its model, so it must share the same explicit producer dependency.
+// AGP reads the generated main asset source set from every variant. Asset merge and lint tasks
+// therefore share one explicit producer dependency instead of variant-specific copies.
 tasks.configureEach {
-    if (name == "mergeDebugAssets" || (name.contains("Debug") && name.lowercase().contains("lint"))) {
-        dependsOn(prepareCodexCliDebug)
+    if (
+        (name.startsWith("merge") && name.endsWith("Assets")) ||
+        name.lowercase().contains("lint")
+    ) {
+        dependsOn(prepareCodexCliAssets)
     }
 }
 

@@ -14,6 +14,7 @@ from codex_gateway.app_server.jsonl import JsonlDecoder, JsonlProtocolError
 
 from .contract import (
     AUTH_METHOD_ID,
+    CACHED_TOKEN_AUTH_METHOD_ID,
     GrokInitializeState,
     _RequestMethod,
     initialize_params,
@@ -67,6 +68,7 @@ _METHOD_TIMEOUT_SECONDS: Mapping[_RequestMethod, float] = {
     _RequestMethod.SESSION_CLOSE: 15.0,
 }
 POST_INITIALIZE_STABILITY_SECONDS = 0.5
+CACHED_AUTHENTICATE_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,7 @@ class GrokAcpSupervisor:
             )
             self._spawn_owner_thread.start()
         self._initialize_state: Optional[GrokInitializeState] = None
+        self._authenticated_method_id: Optional[str] = None
         self._stderr = DiscardingStderrDiagnostics()
         self._fixture_timeout_scale = getattr(self, "_fixture_timeout_scale", 1.0)
         self._fixture_max_pending = getattr(self, "_fixture_max_pending", 16)
@@ -170,6 +173,11 @@ class GrokAcpSupervisor:
             return self._initialize_state
 
     @property
+    def authenticated_method_id(self) -> Optional[str]:
+        with self._lock:
+            return self._authenticated_method_id
+
+    @property
     def stderr_diagnostic(self) -> str:
         return self._stderr.snapshot()
 
@@ -182,6 +190,7 @@ class GrokAcpSupervisor:
             generation = self._generation
             self._exit_event.clear()
             self._initialize_state = None
+            self._authenticated_method_id = None
 
         try:
             if self._spec.validate_policy:
@@ -248,26 +257,30 @@ class GrokAcpSupervisor:
             response = self._typed_request(_RequestMethod.INITIALIZE, initialize_params())
             normalized = parse_initialize_result(response)
             if self._spec.validate_policy:
-                # Pinned Grok CLI 1.0.0 can acknowledge initialize before its extension handlers
-                # are ready. Require a bounded no-exit interval, then complete one ordered,
-                # content-discarding auth-info request before publishing READY. This keeps the
-                # first HTTP account request from racing the CLI's post-initialize transition.
+                # Require a bounded no-exit interval before publishing READY. Authentication and
+                # session setup then follow the standard ACP sequence without private readiness
+                # probes.
                 if self._exit_event.wait(POST_INITIALIZE_STABILITY_SECONDS):
                     raise AcpProcessLost()
                 with self._lock:
                     if self._state is not GrokSupervisorState.INITIALIZING:
                         raise AcpProcessLost()
-                readiness = self._require_rpc().request(
-                    _RequestMethod.AUTH_INFO,
-                    {},
-                    self._method_timeout(_RequestMethod.AUTH_INFO),
+            if normalized.auth_method_id == CACHED_TOKEN_AUTH_METHOD_ID:
+                # The official ACP client eagerly authenticates the initialize response's
+                # ``defaultAuthMethodId``. Merely observing ``cached_token`` in auth/info is not
+                # enough: authenticate installs the persisted OAuth session into the live sampler.
+                # The response can contain account metadata, so validate only its envelope and
+                # discard it immediately.
+                cached_response = self._require_rpc().request(
+                    _RequestMethod.AUTHENTICATE,
+                    {"methodId": CACHED_TOKEN_AUTH_METHOD_ID},
+                    min(
+                        self._method_timeout(_RequestMethod.AUTHENTICATE),
+                        CACHED_AUTHENTICATE_TIMEOUT_SECONDS * self._fixture_timeout_scale,
+                    ),
                 )
-                if (
-                    not isinstance(readiness, dict)
-                    or len(readiness) > 128
-                    or readiness.get("methodId") not in (None, AUTH_METHOD_ID)
-                ):
-                    raise AcpProtocolError("grok_readiness_barrier_invalid")
+                if not isinstance(cached_response, dict) or len(cached_response) > 128:
+                    raise AcpProtocolError("grok_cached_auth_invalid")
         except (AcpError, ValueError, GrokSupervisorError) as error:
             self._fail(AcpProtocolError("grok_initialize_failed"), generation)
             raise GrokSupervisorError("grok_initialize_failed") from error
@@ -276,6 +289,8 @@ class GrokAcpSupervisor:
             if self._state is not GrokSupervisorState.INITIALIZING or generation != self._generation:
                 raise GrokSupervisorError("grok_initialize_failed")
             self._initialize_state = normalized
+            if normalized.auth_method_id == CACHED_TOKEN_AUTH_METHOD_ID:
+                self._authenticated_method_id = CACHED_TOKEN_AUTH_METHOD_ID
             self._state = GrokSupervisorState.READY
         return normalized
 
@@ -288,13 +303,16 @@ class GrokAcpSupervisor:
     def authenticate(self, request_sequence: int) -> Dict[str, Any]:
         if not isinstance(request_sequence, int) or isinstance(request_sequence, bool) or request_sequence <= 0:
             raise ValueError("request sequence invalid")
-        return self._typed_request(
+        response = self._typed_request(
             _RequestMethod.AUTHENTICATE,
             {
                 "methodId": AUTH_METHOD_ID,
                 "_meta": {"request_seq": request_sequence},
             },
         )
+        with self._lock:
+            self._authenticated_method_id = AUTH_METHOD_ID
+        return response
 
     def get_auth_url(self, timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
         return self._typed_request(
@@ -315,17 +333,24 @@ class GrokAcpSupervisor:
         return self._typed_request(_RequestMethod.AUTH_INFO, {})
 
     def logout(self) -> Dict[str, Any]:
-        return self._typed_request(_RequestMethod.AUTH_LOGOUT, {"scope": None})
+        response = self._typed_request(_RequestMethod.AUTH_LOGOUT, {"scope": None})
+        with self._lock:
+            self._authenticated_method_id = None
+        return response
 
     def list_models(self) -> Dict[str, Any]:
         return self._typed_request(_RequestMethod.MODELS_LIST, {})
 
-    def new_session(self, working_directory: str, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def new_session(self, working_directory: str) -> Dict[str, Any]:
         cwd = self._fixed_working_directory(working_directory)
-        params: Dict[str, Any] = {"cwd": cwd, "mcpServers": []}
-        if model_id is not None:
-            params["_meta"] = {"modelId": opaque_identifier(model_id)}
-        return self._typed_request(_RequestMethod.SESSION_NEW, params)
+        # Keep session/new on the documented ACP surface. Grok does not define modelId as a
+        # session/new _meta field; sending it makes the official CLI reject the whole request.
+        # A non-default model is selected through the standard session/set_model method after the
+        # session exists.
+        return self._typed_request(
+            _RequestMethod.SESSION_NEW,
+            {"cwd": cwd, "mcpServers": []},
+        )
 
     def load_session(self, session_id: str, working_directory: str) -> Dict[str, Any]:
         return self._typed_request(
@@ -433,6 +458,8 @@ class GrokAcpSupervisor:
             self._stdout_thread = None
             self._stderr_thread = None
             self._wait_thread = None
+            self._initialize_state = None
+            self._authenticated_method_id = None
             self._state = GrokSupervisorState.STOPPED
 
     def _typed_request(
@@ -599,6 +626,7 @@ class GrokAcpSupervisor:
             ):
                 return
             self._state = GrokSupervisorState.FAILED
+            self._authenticated_method_id = None
             rpc = self._rpc
             process = self._process
         if rpc is not None:

@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -76,6 +78,8 @@ import dev.alpine.codexclient.ui.theme.AlpineWarning
 class MainActivity : ComponentActivity() {
     private val runtimeViewModel: RuntimeViewModel by viewModels()
     private val chatViewModel: AgentChatViewModel by viewModels()
+    private val resumeHandler = Handler(Looper.getMainLooper())
+    private val restoreConfiguredRuntime = Runnable { runtimeViewModel.onHostResumed() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,6 +89,28 @@ class MainActivity : ComponentActivity() {
                 AlpineAgentClientApp(runtimeViewModel, chatViewModel)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // FGS launch policy observes the Activity as user-visible slightly after onResume on some
+        // Samsung builds. A delayed attempt plus one bounded retry avoids a manual screen toggle.
+        resumeHandler.postDelayed(restoreConfiguredRuntime, RUNTIME_RESTORE_DELAY_MILLIS)
+        resumeHandler.postDelayed(restoreConfiguredRuntime, RUNTIME_RESTORE_RETRY_MILLIS)
+        resumeHandler.postDelayed(restoreConfiguredRuntime, RUNTIME_RESTORE_SETTLED_RETRY_MILLIS)
+    }
+
+    override fun onPause() {
+        resumeHandler.removeCallbacks(restoreConfiguredRuntime)
+        super.onPause()
+    }
+
+    private companion object {
+        const val RUNTIME_RESTORE_DELAY_MILLIS = 750L
+        const val RUNTIME_RESTORE_RETRY_MILLIS = 5_000L
+        // The Gateway's first post-update health timeout is bounded at 30 seconds. Retry once
+        // after that boundary so a stale process/service transition cannot require manual input.
+        const val RUNTIME_RESTORE_SETTLED_RETRY_MILLIS = 45_000L
     }
 }
 
@@ -442,6 +468,7 @@ internal fun RuntimeStatusSheet(
             ) {
                 RuntimeStatusRow("ALPINE", runtimeState.lifecycle.name)
                 RuntimeStatusRow("GATEWAY", runtimeState.gatewayLifecycle.name)
+                runtimeState.gatewayErrorCode?.let { RuntimeStatusRow("GATEWAY ERROR", it.name) }
                 RuntimeStatusRow("TASK", runtimeState.status)
             }
             runtimeState.errorCode?.let { error ->
@@ -499,33 +526,18 @@ internal fun RuntimeStatusSheet(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                     enabled = !runtimeState.busy && !generationActive,
                     onClick = onStartAlpine,
-                ) { Text("Alpine 시작") }
+                ) { Text("Runtime · Gateway 시작") }
             }
             if (runtimeState.sessionActive) {
                 if (
                     runtimeState.gatewayLifecycle == CodexRuntimeLifecycle.STOPPED ||
                     runtimeState.gatewayLifecycle == CodexRuntimeLifecycle.FAILED
                 ) {
-                    val pythonReady = runtimeState.gatewayPythonBootstrap == GatewayPythonBootstrapOutcome.ALREADY_AVAILABLE ||
-                        runtimeState.gatewayPythonBootstrap == GatewayPythonBootstrapOutcome.INSTALLED
                     Button(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                        enabled = !runtimeState.busy && !generationActive && pythonReady,
+                        enabled = !runtimeState.busy && !generationActive,
                         onClick = onStartGateway,
                     ) { Text("Gateway 시작") }
-                    if (!pythonReady) {
-                        AlpinePanel(
-                            modifier = Modifier.fillMaxWidth(),
-                            containerColor = AlpineWarning,
-                            borderColor = AlpineOutline,
-                            padding = PaddingValues(14.dp),
-                        ) {
-                            Text(
-                                text = "진단에서 Gateway Python 준비를 먼저 실행하세요.",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                    }
                 }
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),

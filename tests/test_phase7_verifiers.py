@@ -31,11 +31,12 @@ class Phase7VerifierTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             first = Path(directory) / "first.json"
             second = Path(directory) / "second.json"
-            self.run_script("scripts/generate-debug-component-inventory.py", "--output", str(first))
-            self.run_script("scripts/generate-debug-component-inventory.py", "--output", str(second))
+            self.run_script("scripts/generate-component-inventory.py", "--output", str(first))
+            self.run_script("scripts/generate-component-inventory.py", "--output", str(second))
             self.assertEqual(first.read_bytes(), second.read_bytes())
             inventory = json.loads(first.read_text(encoding="utf-8"))
-            self.assertEqual("alpine-codex-debug-component-inventory/v1", inventory["format"])
+            self.assertEqual("alpine-codex-component-inventory/v1", inventory["format"])
+            self.assertEqual("debug-secureDebug-release", inventory["scope"])
             self.assertEqual("SPDX-2.3", inventory["sboms"][0]["format"])
 
     def test_clean_room_source_and_git_scan_passes_without_an_apk(self) -> None:

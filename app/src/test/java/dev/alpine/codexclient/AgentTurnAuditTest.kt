@@ -35,4 +35,20 @@ class AgentTurnAuditTest {
             assertFalse(line.contains(forbidden))
         }
     }
+
+    @Test
+    fun `state audit lines stay content free and expose only bounded stop checkpoints`() {
+        assertEquals(
+            "agent=grok state=started request_bound=1",
+            AgentTurnStateAudit.startedLine(),
+        )
+        assertEquals(
+            "agent=grok state=stop_requested dispatched=0",
+            AgentTurnStateAudit.stopLine(dispatched = false),
+        )
+        assertEquals(
+            "agent=grok state=stop_requested dispatched=1",
+            AgentTurnStateAudit.stopLine(dispatched = true),
+        )
+    }
 }

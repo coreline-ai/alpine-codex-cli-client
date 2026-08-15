@@ -3,7 +3,6 @@ package dev.alpine.codexclient.bridge
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
@@ -87,6 +86,7 @@ class GatewayStreamControl internal constructor() {
  */
 open class CodexGatewayClient(
     private val requestSigner: GatewayRequestSigner = GatewayRequestSigner.ephemeral(),
+    private val transport: GatewayTransport = DisabledGatewayTransport,
 ) : GatewayRuntimeHealthClient {
 
     override fun isRuntimeHealthy(): Boolean = health().let {
@@ -331,11 +331,7 @@ open class CodexGatewayClient(
             throw GatewayClientException(GatewayClientErrorCode.INVALID_ENDPOINT)
         }
         return try {
-            (URL(LOOPBACK_ENDPOINT + path).openConnection() as HttpURLConnection).apply {
-                connectTimeout = CONNECT_TIMEOUT_MILLIS
-                readTimeout = READ_TIMEOUT_MILLIS
-                useCaches = false
-            }
+            transport.open(path)
         } catch (_: Exception) {
             throw GatewayClientException(GatewayClientErrorCode.CONNECTION_FAILED)
         }
@@ -420,10 +416,6 @@ open class CodexGatewayClient(
     private fun ByteArray.dropLeadingSpace(): ByteArray = if (firstOrNull() == ' '.code.toByte()) copyOfRange(1, size) else this
 
     private companion object {
-        const val LOOPBACK_ENDPOINT = "http://127.0.0.1:8787"
-        const val LOOPBACK_PORT = 8787
-        const val CONNECT_TIMEOUT_MILLIS = 5_000
-        const val READ_TIMEOUT_MILLIS = 30_000
         const val MAX_REQUEST_BYTES = 32 * 1024
         const val MAX_RESPONSE_BYTES = 128 * 1024
         const val MAX_STREAM_EVENT_BYTES = 32 * 1024

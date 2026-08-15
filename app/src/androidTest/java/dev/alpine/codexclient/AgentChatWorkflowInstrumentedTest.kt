@@ -19,6 +19,8 @@ import dev.alpine.codexclient.bridge.CodexRuntimeState
 import dev.alpine.codexclient.bridge.CodexRuntimeStateListener
 import dev.alpine.codexclient.bridge.CodexRuntimeStateSource
 import dev.alpine.codexclient.bridge.GatewayAgent
+import dev.alpine.codexclient.bridge.GatewayClientErrorCode
+import dev.alpine.codexclient.bridge.GatewayClientException
 import dev.alpine.runtime.api.RuntimeSubscription
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
@@ -304,6 +306,40 @@ class AgentChatWorkflowInstrumentedTest {
     }
 
     @Test
+    fun appResumeRecoversCompletedGrokOAuthWhenPendingLoginRecordWasLost() {
+        val gateway = FakeAgentGatewayClient().apply { approve(AgentId.CODEX) }
+        val viewModel = onMain {
+            AgentChatViewModel(
+                application,
+                FakeRuntimeStateSource(),
+                gateway,
+                AgentGatewayChatBackend(gateway),
+                true,
+            )
+        }
+        awaitState(viewModel) { it.connection == AgentConnectionState.READY }
+        onMain { viewModel.switchAgent(AgentId.GROK) }
+        awaitState(viewModel) {
+            it.selectedAgentId == AgentId.GROK && it.connection == AgentConnectionState.LOGIN_REQUIRED
+        }
+        onMain { viewModel.startDeviceLogin() }
+        awaitState(viewModel) { it.connection == AgentConnectionState.LOGIN_PENDING }
+
+        gateway.approve(AgentId.GROK)
+        gateway.loseLoginRecord(AgentId.GROK)
+        onMain { viewModel.onHostResumed() }
+
+        awaitState(viewModel) {
+            it.selectedAgentId == AgentId.GROK &&
+                it.connection == AgentConnectionState.READY &&
+                it.selectedModelId == "grok-default"
+        }
+        assertEquals(1, gateway.loginStarts[AgentId.GROK])
+        assertEquals(1, gateway.loginStatusCalls[AgentId.GROK])
+        assertNull(viewModel.state.value.login)
+    }
+
+    @Test
     fun partialFailureKeepsOneUserOneAssistantAndRecreationNeverReplays() {
         val gateway = FakeAgentGatewayClient().apply { approve(AgentId.CODEX) }
         val viewModel = onMain {
@@ -437,11 +473,13 @@ class AgentChatWorkflowInstrumentedTest {
 
         @Volatile var selectedAgent: AgentId = AgentId.CODEX
         val loginStarts = mutableMapOf<AgentId, Int>()
+        val loginStatusCalls = mutableMapOf<AgentId, Int>()
         val sentRequests = mutableListOf<AgentGatewayChatRequest>()
         val interrupts = mutableMapOf<AgentId, Int>()
         val logouts = mutableMapOf<AgentId, Int>()
         val cancelledLogins = mutableMapOf<AgentId, Int>()
         var omitNextCodexCode = false
+        private val missingLoginRecords = mutableSetOf<AgentId>()
         private val authenticated = mutableMapOf(AgentId.CODEX to false, AgentId.GROK to false)
         @Volatile private var blockNext = false
         @Volatile private var delayStartNext = false
@@ -487,15 +525,29 @@ class AgentChatWorkflowInstrumentedTest {
             )
         }
 
-        override fun loginStatus(agentId: AgentId, requestId: String) = AgentLogin(
-            agentId,
-            requestId,
-            if (authenticated[agentId] == true) {
-                if (agentId == AgentId.CODEX) "completed" else "authenticated"
-            } else {
-                "pending"
-            },
-        )
+        override fun loginStatus(agentId: AgentId, requestId: String): AgentLogin {
+            loginStatusCalls[agentId] = (loginStatusCalls[agentId] ?: 0) + 1
+            if (agentId in missingLoginRecords) {
+                throw GatewayClientException(
+                    GatewayClientErrorCode.HTTP_ERROR,
+                    statusCode = 404,
+                    gatewayCode = "login_not_found",
+                )
+            }
+            return AgentLogin(
+                agentId,
+                requestId,
+                if (authenticated[agentId] == true) {
+                    if (agentId == AgentId.CODEX) "completed" else "authenticated"
+                } else {
+                    "pending"
+                },
+            )
+        }
+
+        fun loseLoginRecord(agentId: AgentId) {
+            missingLoginRecords += agentId
+        }
 
         override fun cancelLogin(agentId: AgentId, requestId: String): AgentLogin {
             cancelledLogins[agentId] = (cancelledLogins[agentId] ?: 0) + 1

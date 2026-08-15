@@ -21,6 +21,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -32,8 +33,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.stream.Stream
 
+internal data class PrivateDirectoryBind(
+    val hostDirectory: File,
+    val guestDirectory: String,
+)
+
 internal class ProotProcessLauncher(
     private val cacheDirectory: File,
+    private val privateDirectoryBinds: List<PrivateDirectoryBind> = emptyList(),
     private val environmentContributors: List<RuntimeEnvironmentContributor>,
     private val processListener: RuntimeHostProcessListener,
     private val maxOutputBytes: Int,
@@ -75,6 +82,8 @@ internal class ProotProcessLauncher(
             .apply { mkdirs() }
         val guestPidFile = File(guestPidDirectory, "process-$pid.pid")
         val guestPidPath = "/workspace/.alpine-runtime/processes/${guestPidFile.name}"
+        val hostWorkspaceAlias = ensureHostWorkspaceAliasMountPoint(runtime)
+        val privateBinds = privateBindArguments(runtime)
         val command = mutableListOf(
             runtime.launcher.absolutePath,
             "-0",
@@ -90,6 +99,17 @@ internal class ProotProcessLauncher(
             "/sys",
             "-b",
             "${runtime.workspaceDirectory.absolutePath}:/workspace",
+            // PRoot does not rewrite filesystem paths embedded in AF_UNIX sockaddr structures.
+            // Expose only the already-private workspace at its canonical host path as well, so
+            // a guest can bind one app-owned Unix socket without exposing any additional tree.
+            "-b",
+            hostWorkspaceAlias,
+        )
+        privateBinds.forEach { bind ->
+            command += "-b"
+            command += bind
+        }
+        command += listOf(
             "-w",
             request.workingDirectory,
             "/bin/sh",
@@ -229,6 +249,8 @@ internal class ProotProcessLauncher(
             .apply { mkdirs() }
         val guestPidFile = File(guestPidDirectory, "terminal-$pid.pid")
         val guestPidPath = "/workspace/.alpine-runtime/processes/${guestPidFile.name}"
+        val hostWorkspaceAlias = ensureHostWorkspaceAliasMountPoint(runtime)
+        val privateBinds = privateBindArguments(runtime)
         val command = buildList {
             add(runtime.launcher.absolutePath)
             add("-0")
@@ -244,6 +266,12 @@ internal class ProotProcessLauncher(
             add("/sys")
             add("-b")
             add("${runtime.workspaceDirectory.absolutePath}:/workspace")
+            add("-b")
+            add(hostWorkspaceAlias)
+            privateBinds.forEach { bind ->
+                add("-b")
+                add(bind)
+            }
             ttyDiagnosticGuestHelper?.let { helper ->
                 add("-b")
                 add("${helper.absolutePath}:$TTY_DIAGNOSTIC_HELPER_GUEST_PATH")
@@ -320,6 +348,63 @@ internal class ProotProcessLauncher(
                 onClosed(terminalId, exitCode)
             },
         )
+    }
+
+    /**
+     * Creates only empty, non-symlink mount-point directories inside the private rootfs.
+     * PRoot then maps the existing workspace to its canonical host path as well as /workspace.
+     */
+    private fun ensureHostWorkspaceAliasMountPoint(runtime: InstalledRuntime): String {
+        val rootfs = runtime.rootfsDirectory.canonicalFile
+        check(rootfs.isDirectory && !Files.isSymbolicLink(runtime.rootfsDirectory.toPath()))
+        val workspace = runtime.workspaceDirectory.canonicalFile
+        check(workspace.isDirectory && workspace.absolutePath.startsWith('/'))
+        var current = rootfs
+        workspace.toPath().forEach { segment ->
+            val name = segment.toString()
+            check(name.isNotEmpty() && name != "." && name != "..")
+            current = File(current, name)
+            if (current.exists()) {
+                check(current.isDirectory && !Files.isSymbolicLink(current.toPath()))
+            } else {
+                check(current.mkdir())
+            }
+        }
+        check(current.canonicalFile.toPath().startsWith(rootfs.toPath()))
+        return workspace.absolutePath
+    }
+
+    /** Resolves only factory-configured no-backup directories to empty workspace mount points. */
+    private fun privateBindArguments(runtime: InstalledRuntime): List<String> {
+        if (privateDirectoryBinds.isEmpty()) return emptyList()
+        val workspace = runtime.workspaceDirectory.canonicalFile
+        check(workspace.isDirectory && !Files.isSymbolicLink(runtime.workspaceDirectory.toPath()))
+        return privateDirectoryBinds.map { bind ->
+            val host = bind.hostDirectory.canonicalFile
+            check(
+                host.isDirectory &&
+                    !Files.isSymbolicLink(bind.hostDirectory.toPath()) &&
+                    host == bind.hostDirectory
+            )
+            check(bind.guestDirectory.startsWith("/workspace/"))
+            val relative = bind.guestDirectory.removePrefix("/workspace/")
+            check(relative.isNotEmpty())
+            var mountPoint = workspace
+            relative.split('/').forEach { segment ->
+                check(segment.matches(SAFE_GUEST_SEGMENT) && segment != "." && segment != "..")
+                mountPoint = File(mountPoint, segment)
+                if (mountPoint.exists()) {
+                    check(mountPoint.isDirectory && !Files.isSymbolicLink(mountPoint.toPath()))
+                } else {
+                    check(mountPoint.mkdir())
+                }
+            }
+            check(mountPoint.canonicalFile.toPath().startsWith(workspace.toPath()))
+            check(mountPoint.list()?.isEmpty() == true) {
+                "private mount point must not hide workspace state"
+            }
+            "${host.absolutePath}:${bind.guestDirectory}"
+        }
     }
 
     private fun launchTerminalProcess(
@@ -955,6 +1040,7 @@ internal class ProotProcessLauncher(
                 "stty cols \"\$cols\" rows \"\$rows\" 2>/dev/null || true; " +
                 "exec \"\$shell\" -i"
         private val ENVIRONMENT_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
+        private val SAFE_GUEST_SEGMENT = Regex("[A-Za-z0-9._-]+")
         private val RESERVED_ENVIRONMENT = setOf(
             "PROOT_TMP_DIR",
             "PROOT_LOADER",

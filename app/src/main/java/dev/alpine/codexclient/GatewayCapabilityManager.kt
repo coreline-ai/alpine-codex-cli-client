@@ -22,12 +22,9 @@ import javax.crypto.spec.GCMParameterSpec
 internal class GatewayCapabilityManager(
     context: Context,
     private val capabilityDirectory: File,
+    private val wrappedDirectory: File,
 ) : GatewaySecretProvider, AutoCloseable {
     private val applicationId = context.packageName
-    private val wrappedDirectory = AppPrivatePathPolicy.ensureDirectory(
-        context.filesDir,
-        File(context.filesDir, "gateway-security"),
-    )
     private val wrappedFile = File(wrappedDirectory, WRAPPED_FILE)
     private val capabilityFile = File(capabilityDirectory, CAPABILITY_FILE)
     private var activeSecret: ByteArray? = loadWrapped()

@@ -17,7 +17,7 @@ from codex_gateway.grok_acp.policy import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_SOURCE = (
-    PROJECT_ROOT / "grok-cli-pack/src/debug/assets/grok-profile/chat-only.md"
+    PROJECT_ROOT / "grok-cli-pack/src/main/assets/grok-profile/chat-only.md"
 )
 
 

@@ -14,6 +14,7 @@ import dev.alpine.runtime.host.RuntimeHostState
 import dev.alpine.codexclient.cli.CodexCliArtifactException
 import dev.alpine.codexclient.grokcli.GrokCliArtifactException
 import dev.alpine.codexclient.gatewaypack.CodexGatewayArtifactException
+import dev.alpine.codexclient.bridge.CodexRuntimeErrorCode
 import dev.alpine.codexclient.bridge.CodexRuntimeLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +40,7 @@ data class RuntimeUiState(
     val appServerSmoke: AppServerSmokeOutcome? = null,
     val grokAcpSmoke: GrokAcpSmokeOutcome? = null,
     val gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
+    val gatewayErrorCode: CodexRuntimeErrorCode? = null,
 )
 
 /** Closed result of staging and fixed-version verification for the official debug CLI. */
@@ -126,25 +128,53 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                     appServerSmoke = current.appServerSmoke,
                     grokAcpSmoke = current.grokAcpSmoke,
                     gatewayLifecycle = current.gatewayLifecycle,
+                    gatewayErrorCode = current.gatewayErrorCode,
                 )
             }
         }
     }
     private val gatewayStateSubscription = app.codexRuntimeController.addStateListener { gatewayState ->
         mainHandler.post {
-            _state.update { current -> current.copy(gatewayLifecycle = gatewayState.lifecycle) }
+            _state.update { current ->
+                current.copy(
+                    gatewayLifecycle = gatewayState.lifecycle,
+                    gatewayErrorCode = gatewayState.errorCode,
+                )
+            }
         }
     }
 
-    fun install() = runOperation("RUNTIME_INSTALLING") { app.runtimeController.install() }
+    fun install() = runOperation("RUNTIME_INSTALLING") {
+        app.runtimeController.install().thenCompose {
+            app.setRuntimeRestoreRequested(true)
+            app.restoreConfiguredRuntime()
+        }
+    }
 
-    fun startAlpine() = runOperation("RUNTIME_STARTING") { app.startAlpineRuntime() }
+    fun startAlpine() = startConfiguredRuntime()
 
-    fun startGateway() = runOperation("GATEWAY_STARTING") { app.startRuntime() }
+    fun startGateway() = startConfiguredRuntime()
+
+    /** Recreates the configured local stack after app process death or a data-preserving update. */
+    fun onHostResumed() {
+        if (_state.value.busy || !app.shouldRestoreConfiguredRuntime()) return
+        // A controller can still report RUNNING after the app-private child processes have been
+        // reclaimed. The configured starter performs a bounded private-UDS health probe and turns
+        // that stale logical state into a complete Runtime/Gateway restart.
+        runOperation("RUNTIME_RESTORING") { app.restoreConfiguredRuntime() }
+    }
 
     fun refresh() = runOperation("RUNTIME_HEALTH_CHECKING") { app.runtimeController.refreshHealth() }
 
-    fun stop() = runOperation("RUNTIME_STOPPING") { app.stopRuntime() }
+    fun stop() {
+        app.setRuntimeRestoreRequested(false)
+        runOperation("RUNTIME_STOPPING") { app.stopRuntime() }
+    }
+
+    private fun startConfiguredRuntime() {
+        app.setRuntimeRestoreRequested(true)
+        runOperation("GATEWAY_STARTING") { app.restoreConfiguredRuntime() }
+    }
 
     /**
      * Stages the checksum-pinned CLI and runs only its fixed `--version` argv inside Alpine.
@@ -295,10 +325,9 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * User-initiated, fixed gateway bootstrap and smoke checks. Only exact `apk add` argv for
-     * `python3` may run; arbitrary package or terminal input is never accepted. A fresh Alpine
-     * rootfs has no package index, so the preflight deliberately uses `--no-cache` too.
-     * Guest output is not rendered or logged.
+     * User-initiated, fixed Gateway preparation. Only hash-locked `.apk` files staged from this
+     * APK are accepted, and `apk add --no-network` prevents repository access. Arbitrary package,
+     * URL, repository, or terminal input is never accepted. Guest output is not rendered or logged.
      */
     fun runSmoke() {
         if (_state.value.busy) return
@@ -360,6 +389,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             appServerSmoke = current.appServerSmoke,
                             grokAcpSmoke = current.grokAcpSmoke,
                             gatewayLifecycle = current.gatewayLifecycle,
+                            gatewayErrorCode = current.gatewayErrorCode,
                         )
                     },
                     onFailure = { error ->
@@ -372,6 +402,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
                             appServerSmoke = current.appServerSmoke,
                             grokAcpSmoke = current.grokAcpSmoke,
                             gatewayLifecycle = current.gatewayLifecycle,
+                            gatewayErrorCode = current.gatewayErrorCode,
                         )
                     },
                 )
@@ -394,6 +425,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         appServerSmoke: AppServerSmokeOutcome? = null,
         grokAcpSmoke: GrokAcpSmokeOutcome? = null,
         gatewayLifecycle: CodexRuntimeLifecycle = CodexRuntimeLifecycle.STOPPED,
+        gatewayErrorCode: CodexRuntimeErrorCode? = null,
     ) = RuntimeUiState(
         lifecycle = runtimeState.lifecycle,
         operation = operation,
@@ -406,6 +438,7 @@ class RuntimeViewModel(application: Application) : AndroidViewModel(application)
         appServerSmoke = appServerSmoke,
         grokAcpSmoke = grokAcpSmoke,
         gatewayLifecycle = gatewayLifecycle,
+        gatewayErrorCode = gatewayErrorCode,
     )
 
     private fun Throwable.findRuntimeErrorCode(): RuntimeErrorCode = generateSequence(this) { it.cause }

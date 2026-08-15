@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from enum import Enum
+import json
+import os
 import secrets
+import stat
 import threading
 import time
 from typing import Any, Callable, Deque, Dict, Iterator, Optional, Protocol, Tuple
@@ -23,14 +26,19 @@ from codex_gateway.agents.contracts import (
     AgentTurnDiagnostics,
     AgentTurnHandle,
 )
-from codex_gateway.grok_acp.contract import AUTH_METHOD_ID, parse_model_catalog
+from codex_gateway.grok_acp.contract import (
+    AUTHENTICATED_METHOD_IDS,
+)
 from codex_gateway.grok_acp.process import GrokAcpSupervisor, GrokSupervisorState
-from codex_gateway.grok_acp.rpc import AcpNotification, GrokProfileAudit
+from codex_gateway.grok_acp.rpc import AcpNotification, AcpRemoteError, GrokProfileAudit
 
 
 GROK_LOGIN_TTL_SECONDS = 10 * 60
 GROK_AUTH_URL_READY_TIMEOUT_SECONDS = 15.0
 GROK_AUTH_URL_POLL_SECONDS = 0.1
+GROK_STREAM_DRAIN_POLL_SECONDS = 0.15
+GROK_STREAM_DRAIN_STABLE_CHECKS = 2
+GROK_STREAM_DRAIN_EMPTY_TIMEOUT_SECONDS = 1.0
 MAX_LOGIN_RECORDS = 16
 MAX_CONVERSATIONS = 64
 MAX_MESSAGE_BYTES = 16 * 1024
@@ -39,6 +47,7 @@ MAX_STREAM_TOTAL_BYTES = 256 * 1024
 MAX_STREAM_EVENTS = 128
 MAX_RETRY_ATTEMPTS = 32
 MAX_COMPLETED_TURN_IDS = 32
+MAX_BINDING_STORE_BYTES = 64 * 1024
 GROK_AUTH_ALLOWED_HOSTS = frozenset({"auth.x.ai", "accounts.x.ai"})
 TERMINAL_LOGIN_STATES = frozenset({"authenticated", "failed", "cancelled", "expired"})
 
@@ -84,6 +93,9 @@ class _GrokSupervisor(Protocol):
     @property
     def initialize_state(self) -> Any: ...
 
+    @property
+    def authenticated_method_id(self) -> Optional[str]: ...
+
     def start(self) -> Any: ...
 
     def stop(self, timeout_seconds: float = 5.0) -> None: ...
@@ -98,13 +110,9 @@ class _GrokSupervisor(Protocol):
 
     def cancel_auth(self, request_sequence: int) -> Dict[str, Any]: ...
 
-    def auth_info(self) -> Dict[str, Any]: ...
-
     def logout(self) -> Dict[str, Any]: ...
 
-    def list_models(self) -> Dict[str, Any]: ...
-
-    def new_session(self, working_directory: str, model_id: Optional[str] = None) -> Dict[str, Any]: ...
+    def new_session(self, working_directory: str) -> Dict[str, Any]: ...
 
     def load_session(self, session_id: str, working_directory: str) -> Dict[str, Any]: ...
 
@@ -185,12 +193,17 @@ class GrokAgentAdapter:
         restored_bindings: Tuple[AgentConversationBinding, ...] = (),
         now: Callable[[], float] = time.monotonic,
         retry_policy: GrokRetryPolicy = GrokRetryPolicy.ALLOW_PRE_OUTPUT,
+        binding_store_path: Optional[str] = None,
     ) -> None:
         if not isinstance(workspace_directory, str) or not workspace_directory.startswith("/"):
             raise ValueError("Grok workspace directory must be absolute")
         self._workspace_directory = workspace_directory
         if not isinstance(retry_policy, GrokRetryPolicy):
             raise ValueError("invalid Grok retry policy")
+        if binding_store_path is not None and (
+            not isinstance(binding_store_path, str) or not binding_store_path.startswith("/")
+        ):
+            raise ValueError("Grok binding store path must be absolute")
         self._supervisor: _GrokSupervisor = supervisor or GrokAcpSupervisor()
         self._now = now
         self._retry_policy = retry_policy
@@ -205,12 +218,19 @@ class GrokAgentAdapter:
         self._models: Tuple[AgentModel, ...] = ()
         self._model_ids: set[str] = set()
         self._bindings: "OrderedDict[str, AgentConversationBinding]" = OrderedDict()
+        self._binding_store_path = binding_store_path
+        self._restored_binding_ids: set[str] = set()
         self._remove_listener: Optional[Callable[[], None]] = None
         for binding in restored_bindings:
             self._validate_binding(binding)
             if binding.conversation_id in self._bindings:
                 raise ValueError("duplicate Grok conversation binding")
             self._bindings[binding.conversation_id] = binding
+        for binding in self._load_binding_store():
+            if binding.conversation_id in self._bindings:
+                continue
+            self._bindings[binding.conversation_id] = binding
+            self._restored_binding_ids.add(binding.conversation_id)
 
     def is_ready(self) -> bool:
         return getattr(self._supervisor.state, "value", self._supervisor.state) == "READY"
@@ -261,7 +281,10 @@ class GrokAgentAdapter:
 
     def account(self) -> AgentAccount:
         self._require_ready()
-        authenticated = self._authenticated_boolean(self._supervisor.auth_info())
+        method_id = self._supervisor.authenticated_method_id
+        if method_id not in ({None} | AUTHENTICATED_METHOD_IDS):
+            raise GrokAdapterError("grok_auth_response_invalid")
+        authenticated = method_id in AUTHENTICATED_METHOD_IDS
         return AgentAccount(
             agent_id=self.agent_id,
             authenticated=authenticated,
@@ -384,10 +407,12 @@ class GrokAgentAdapter:
         with self._lock:
             bindings = tuple(self._bindings.values())
             self._bindings.clear()
+            self._restored_binding_ids.clear()
             self._logins.clear()
             self._active_login_id = None
             self._models = ()
             self._model_ids.clear()
+            self._persist_binding_store_locked()
         for binding in bindings:
             if binding.process_generation == self._supervisor.generation and self.is_ready():
                 try:
@@ -397,21 +422,23 @@ class GrokAgentAdapter:
 
     def models(self) -> Tuple[AgentModel, ...]:
         self._require_authenticated()
-        response = self._supervisor.list_models()
-        state = self._model_result(response)
+        state = self._supervisor.initialize_state
+        if state is None:
+            raise GrokAdapterError("grok_models_invalid")
         try:
-            summaries, current = parse_model_catalog(state)
-        except ValueError as error:
-            raise GrokAdapterError("grok_models_invalid") from error
-        values = tuple(
-            AgentModel(
-                agent_id=self.agent_id,
-                model_id=item.model_id,
-                display_name=item.display_name,
-                is_default=item.model_id == current,
+            summaries = state.models
+            current = state.current_model_id
+            values = tuple(
+                AgentModel(
+                    agent_id=self.agent_id,
+                    model_id=item.model_id,
+                    display_name=item.display_name,
+                    is_default=item.model_id == current,
+                )
+                for item in summaries
             )
-            for item in summaries
-        )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise GrokAdapterError("grok_models_invalid") from error
         with self._lock:
             self._models = values
             self._model_ids = {item.model_id for item in values}
@@ -513,6 +540,15 @@ class GrokAgentAdapter:
             should_cancel = self._reserve_cancel_locked(active)
         if should_cancel:
             self._send_cancel(active, suppress_error=False)
+            # `session/cancel` is the authoritative acknowledgement for the user's Stop. Grok
+            # 1.0.0 can keep the outstanding `session/prompt` RPC open after acknowledging that
+            # cancel, so waiting for its late response can outlive Android's bounded SSE timeout.
+            # Publish the single terminal event immediately; the prompt worker and any late
+            # notification are already guarded by `active.terminal` and cannot publish twice.
+            self._refresh_profile_audit(active)
+            self._refresh_prompt_dispatch(active)
+            with active.condition:
+                self._terminal_locked(active, "error", "turn_interrupted")
 
     def turn_metrics(self) -> Optional[GrokTurnMetrics]:
         """Return redacted counters only; no request, session, text, or retry reason."""
@@ -524,6 +560,129 @@ class GrokAgentAdapter:
         with self._lock:
             return tuple(self._bindings.values())
 
+    def _load_binding_store(self) -> Tuple[AgentConversationBinding, ...]:
+        path = self._binding_store_path
+        if path is None:
+            return ()
+        descriptor: Optional[int] = None
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            value = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(value.st_mode)
+                or stat.S_IMODE(value.st_mode) != 0o600
+                or value.st_size <= 0
+                or value.st_size > MAX_BINDING_STORE_BYTES
+            ):
+                return ()
+            with os.fdopen(descriptor, "r", encoding="utf-8") as source:
+                descriptor = None
+                payload = json.load(source)
+        except FileNotFoundError:
+            return ()
+        except (OSError, UnicodeError, ValueError, TypeError):
+            return ()
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            return ()
+        rows = payload.get("bindings")
+        if not isinstance(rows, list):
+            return ()
+        bindings = []
+        for row in rows[-MAX_CONVERSATIONS:]:
+            if not isinstance(row, dict) or set(row) != {
+                "agent_id",
+                "conversation_id",
+                "backend_session_id",
+                "model_id",
+            }:
+                continue
+            try:
+                binding = AgentConversationBinding(
+                    agent_id=AgentId.parse_exact(row["agent_id"]),
+                    conversation_id=row["conversation_id"],
+                    backend_session_id=row["backend_session_id"],
+                    model_id=row["model_id"],
+                    # Persisted generations are intentionally not trusted across process lives.
+                    process_generation=1,
+                )
+                self._validate_binding(binding)
+            except (TypeError, ValueError):
+                continue
+            bindings.append(binding)
+        return tuple(bindings)
+
+    def _persist_binding_store_locked(self) -> None:
+        path = self._binding_store_path
+        if path is None:
+            return
+        directory = os.path.dirname(path)
+        temporary = path + ".tmp-" + secrets.token_hex(8)
+        payload = {
+            "schema_version": 1,
+            "bindings": [
+                {
+                    "agent_id": binding.agent_id.value,
+                    "conversation_id": binding.conversation_id,
+                    "backend_session_id": binding.backend_session_id,
+                    "model_id": binding.model_id,
+                }
+                for binding in self._bindings.values()
+            ],
+        }
+        encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > MAX_BINDING_STORE_BYTES:
+            raise GrokAdapterError("conversation_store_failed")
+        descriptor: Optional[int] = None
+        try:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            directory_value = os.lstat(directory)
+            if (
+                stat.S_ISLNK(directory_value.st_mode)
+                or not stat.S_ISDIR(directory_value.st_mode)
+                or stat.S_IMODE(directory_value.st_mode) != 0o700
+            ):
+                raise OSError
+            flags = (
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(temporary, flags, 0o600)
+            with os.fdopen(descriptor, "wb") as destination:
+                descriptor = None
+                destination.write(encoded)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary, path)
+        except OSError as error:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise GrokAdapterError("conversation_store_failed") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def _remember_binding(self, binding: AgentConversationBinding) -> None:
+        with self._lock:
+            before = OrderedDict(self._bindings)
+            self._bindings[binding.conversation_id] = binding
+            self._bindings.move_to_end(binding.conversation_id)
+            while len(self._bindings) > MAX_CONVERSATIONS:
+                self._bindings.popitem(last=False)
+            try:
+                self._persist_binding_store_locked()
+            except Exception:
+                self._bindings = before
+                raise
+
     def _authenticate_worker(
         self,
         request_id: str,
@@ -534,7 +693,10 @@ class GrokAgentAdapter:
         succeeded = False
         try:
             self._supervisor.authenticate(sequence)
-            succeeded = self._authenticated_boolean(self._supervisor.auth_info())
+            # Standard ACP authenticate is the authentication authority. Private x.ai auth-info
+            # probes are deliberately not used: the pinned CLI can reject repeated extension
+            # calls after the browser hand-off even though authenticate completed successfully.
+            succeeded = True
         except Exception:
             succeeded = False
         with self._lock:
@@ -575,25 +737,64 @@ class GrokAgentAdapter:
         generation = self._supervisor.generation
         with self._lock:
             existing = self._bindings.get(conversation_id)
+            restored = conversation_id in self._restored_binding_ids
         if existing is not None:
-            self._validate_live_binding(existing, generation)
-            self._supervisor.resume_session(existing.backend_session_id, self._workspace_directory)
-            if existing.model_id != model_id:
-                self._supervisor.set_session_model(existing.backend_session_id, model_id)
-                existing = AgentConversationBinding(
-                    agent_id=self.agent_id,
-                    conversation_id=existing.conversation_id,
-                    backend_session_id=existing.backend_session_id,
-                    model_id=model_id,
-                    process_generation=generation,
+            try:
+                if restored or existing.process_generation != generation:
+                    self._supervisor.load_session(
+                        existing.backend_session_id,
+                        self._workspace_directory,
+                    )
+                else:
+                    self._supervisor.resume_session(
+                        existing.backend_session_id,
+                        self._workspace_directory,
+                    )
+            except AcpRemoteError as error:
+                stage = (
+                    "session_load"
+                    if restored or existing.process_generation != generation
+                    else "session_resume"
                 )
-                with self._lock:
-                    self._bindings[conversation_id] = existing
+                raise GrokAdapterError(self._remote_stage_code(stage, error)) from error
+            if existing.model_id != model_id:
+                try:
+                    self._supervisor.set_session_model(existing.backend_session_id, model_id)
+                except AcpRemoteError as error:
+                    raise GrokAdapterError(self._remote_stage_code("set_model", error)) from error
+            existing = AgentConversationBinding(
+                agent_id=self.agent_id,
+                conversation_id=existing.conversation_id,
+                backend_session_id=existing.backend_session_id,
+                model_id=model_id,
+                process_generation=generation,
+            )
+            self._remember_binding(existing)
+            with self._lock:
+                self._restored_binding_ids.discard(conversation_id)
             return existing
         if resume_existing:
             raise GrokAdapterError("conversation_binding_not_found")
-        response = self._supervisor.new_session(self._workspace_directory, model_id)
+        try:
+            response = self._supervisor.new_session(self._workspace_directory)
+        except AcpRemoteError as error:
+            raise GrokAdapterError(self._remote_stage_code("session_new", error)) from error
         session_id = self._required_string(response, "sessionId")
+        state = self._supervisor.initialize_state
+        current_model_id = getattr(state, "current_model_id", None)
+        if model_id != current_model_id:
+            try:
+                self._supervisor.set_session_model(session_id, model_id)
+            except Exception as error:
+                # The session was created but never published as a conversation binding. Close it
+                # best-effort so a rejected model selection cannot leak an orphaned live session.
+                try:
+                    self._supervisor.close_session(session_id)
+                except Exception:
+                    pass
+                if isinstance(error, AcpRemoteError):
+                    raise GrokAdapterError(self._remote_stage_code("set_model", error)) from error
+                raise
         binding = AgentConversationBinding(
             agent_id=self.agent_id,
             conversation_id=conversation_id,
@@ -601,11 +802,14 @@ class GrokAgentAdapter:
             model_id=model_id,
             process_generation=generation,
         )
-        with self._lock:
-            self._bindings[conversation_id] = binding
-            self._bindings.move_to_end(conversation_id)
-            while len(self._bindings) > MAX_CONVERSATIONS:
-                self._bindings.popitem(last=False)
+        try:
+            self._remember_binding(binding)
+        except Exception:
+            try:
+                self._supervisor.close_session(session_id)
+            except Exception:
+                pass
+            raise
         return binding
 
     def _prompt_worker(self, active: _GrokActiveTurn, text: str) -> None:
@@ -621,6 +825,12 @@ class GrokAgentAdapter:
             self._refresh_profile_audit(active)
             self._refresh_prompt_dispatch(active)
             reason = response.get("stopReason")
+            if reason in ("end_turn", "endTurn"):
+                # xAI's official ACP client example keeps accepting session/update chunks after
+                # the session/prompt response until the text length is stable for two 150 ms
+                # checks. Do the same here; otherwise a mobile/proot scheduling gap can turn a
+                # valid response into a completed but blank assistant card.
+                self._wait_for_stream_drain(active)
             with active.condition:
                 if active.terminal:
                     return
@@ -641,6 +851,28 @@ class GrokAgentAdapter:
                 )
                 self._terminal_locked(active, "error", code)
 
+    @staticmethod
+    def _wait_for_stream_drain(active: _GrokActiveTurn) -> None:
+        empty_deadline = time.monotonic() + GROK_STREAM_DRAIN_EMPTY_TIMEOUT_SECONDS
+        last_size = -1
+        stable_checks = 0
+        while True:
+            time.sleep(GROK_STREAM_DRAIN_POLL_SECONDS)
+            with active.condition:
+                if active.terminal:
+                    return
+                current_size = active.total_output_bytes
+            if current_size > 0:
+                if current_size == last_size:
+                    stable_checks += 1
+                else:
+                    stable_checks = 0
+                if stable_checks >= GROK_STREAM_DRAIN_STABLE_CHECKS:
+                    return
+            elif time.monotonic() >= empty_deadline:
+                return
+            last_size = current_size
+
     def _on_notification(self, notification: AcpNotification) -> None:
         with self._lock:
             active = self._active_turn
@@ -655,17 +887,30 @@ class GrokAgentAdapter:
             active.last_notification_sequence = notification.sequence
             if not self._bind_prompt_locked(active, params, notification.method):
                 return
-        if notification.method == "session/update":
-            self._handle_content_update(active, params.get("update"))
-        elif notification.method in ("_x.ai/session_notification", "_x.ai/session/update"):
-            self._handle_retry_update(active, params.get("update"))
+        if notification.method in (
+            "session/update",
+            "_x.ai/session/update",
+            "_x.ai/session_notification",
+        ):
+            update = params.get("update")
+            update_type = update.get("sessionUpdate") if isinstance(update, dict) else None
+            if update_type == "agent_message_chunk":
+                # Grok 1.0.0 may deliver standard ACP content on either the standard rail or its
+                # replay-capable x.ai update rail. The payload remains the same bounded ACP
+                # ContentChunk in both cases.
+                self._handle_content_update(active, update)
+            elif notification.method != "session/update":
+                self._handle_retry_update(active, update)
         elif notification.method == "_x.ai/session/prompt_complete":
             self._refresh_profile_audit(active)
             self._refresh_prompt_dispatch(active)
             reason = params.get("stopReason")
             with active.condition:
                 if reason in ("end_turn", "endTurn"):
-                    self._terminal_locked(active, "done", None)
+                    # This private notification may precede the last buffered standard ACP text
+                    # chunk. The authoritative session/prompt response owns successful terminal
+                    # publication after the bounded drain window above.
+                    return
                 elif reason == "cancelled":
                     self._terminal_locked(active, "error", "turn_interrupted")
                 else:
@@ -952,22 +1197,6 @@ class GrokAgentAdapter:
             raise GrokAdapterError("authentication_required")
 
     @staticmethod
-    def _authenticated_boolean(response: Dict[str, Any]) -> bool:
-        if not isinstance(response, dict) or len(response) > 128:
-            raise GrokAdapterError("grok_auth_response_invalid")
-        # Deliberately read one non-sensitive discriminator and discard the whole response.
-        return response.get("methodId") == AUTH_METHOD_ID
-
-    @staticmethod
-    def _model_result(response: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(response, dict) or set(response) != {"result"}:
-            raise GrokAdapterError("grok_extension_response_invalid")
-        result = response.get("result")
-        if not isinstance(result, dict) or len(result) > 128:
-            raise GrokAdapterError("grok_extension_response_invalid")
-        return result
-
-    @staticmethod
     def _auth_url_unready(response: Dict[str, Any]) -> bool:
         return (
             isinstance(response, dict)
@@ -1009,6 +1238,16 @@ class GrokAgentAdapter:
         if not isinstance(value, str) or not value or len(value) > 512:
             raise GrokAdapterError("grok_session_response_invalid")
         return value
+
+    @staticmethod
+    def _remote_stage_code(stage: str, error: AcpRemoteError) -> str:
+        if stage not in {"session_new", "session_load", "session_resume", "set_model"}:
+            raise ValueError("invalid remote error stage")
+        remote = error.remote_code
+        suffix = "unknown" if remote is None else (f"n{abs(remote)}" if remote < 0 else str(remote))
+        if error.remote_category is not None:
+            suffix += "_" + error.remote_category.lower()
+        return f"grok_{stage}_remote_{suffix}"
 
     @staticmethod
     def _identifier(value: Any) -> str:
@@ -1060,13 +1299,6 @@ class GrokAgentAdapter:
         ):
             if not isinstance(value, str) or not value or len(value) > 512:
                 raise ValueError("invalid Grok conversation binding")
-
-    @staticmethod
-    def _validate_live_binding(binding: AgentConversationBinding, generation: int) -> None:
-        if binding.agent_id is not AgentId.GROK:
-            raise GrokAdapterError("conversation_agent_mismatch")
-        if binding.process_generation != generation:
-            raise GrokAdapterError("conversation_generation_mismatch")
 
     def _expire_login_locked(self) -> Optional[int]:
         active_id = self._active_login_id

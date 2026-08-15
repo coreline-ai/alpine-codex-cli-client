@@ -1,8 +1,8 @@
-# Grok CLI debug artifact notice
+# Grok CLI artifact notice
 
-This debug-only Android project packages a checksum-pinned copy of the official Grok CLI as a
-generated asset. The executable is never committed to Git, and no release source set, signing
-configuration, APK, or AAB is created by the Grok artifact module.
+This Android project packages a checksum-pinned copy of the official Grok CLI as a generated app
+asset for `debug`, `secureDebug`, and public `release` variants. The executable is never committed to
+Git. Release signing remains owned by the application module and requires external credentials.
 
 | Field | Locked value |
 |---|---|

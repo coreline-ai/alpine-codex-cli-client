@@ -1,10 +1,15 @@
 package dev.alpine.codexclient
 
 import android.app.Application
+import android.os.Process
+import android.system.Os
+import android.system.OsConstants
+import android.util.Log
 import dev.alpine.runtime.android.AndroidRuntimeConfiguration
 import dev.alpine.runtime.android.DefaultAndroidAlpineRuntimeFactory
 import dev.alpine.runtime.api.AlpineRuntimeManager
 import dev.alpine.runtime.api.RuntimeStartRequest
+import dev.alpine.runtime.api.RuntimeLifecycleState
 import dev.alpine.runtime.api.RuntimeStopReason
 import dev.alpine.runtime.api.RuntimeSubscription
 import dev.alpine.runtime.background.android.RuntimeBackgroundHostRegistry
@@ -13,6 +18,8 @@ import dev.alpine.runtime.background.android.RuntimeForegroundServiceController
 import dev.alpine.runtime.host.RuntimeHostController
 import dev.alpine.runtime.pack.bundled.Alpine321Arm64Pack
 import dev.alpine.runtime.pack.bundled.BundledRuntimeArtifactProvider
+import dev.alpine.pythonpack.bundled.BundledPythonPackageProvider
+import dev.alpine.pythonpack.bundled.StagedPythonPackagePack
 import dev.alpine.workspace.android.AppPrivateWorkspaceStore
 import dev.alpine.workspace.api.WorkspaceStore
 import dev.alpine.codexclient.cli.CodexCliArtifactProvider
@@ -32,6 +39,7 @@ import dev.alpine.codexclient.bridge.GatewayLaunchSpec
 import dev.alpine.codexclient.bridge.GatewayRequestSigner
 import dev.alpine.codexclient.bridge.GatewaySessionLifecycle
 import java.io.File
+import java.util.concurrent.CompletionStage
 
 class AlpineCodexApplication : Application() {
     lateinit var runtimeManager: AlpineRuntimeManager
@@ -49,6 +57,16 @@ class AlpineCodexApplication : Application() {
     lateinit var codexGatewayDirectory: File
         private set
     lateinit var gatewaySecurityDirectory: File
+        private set
+    lateinit var gatewayWrappedDirectory: File
+        private set
+    lateinit var conversationStateDirectory: File
+        private set
+    lateinit var gatewayTransportDirectory: File
+        private set
+    internal var sensitiveStateNoBackupCommitted: Boolean = false
+        private set
+    internal var sensitiveStateMigrationFailureCode: String? = null
         private set
     lateinit var grokWorkspaceDirectory: File
         private set
@@ -68,6 +86,8 @@ class AlpineCodexApplication : Application() {
         private set
     lateinit var codexGatewayArtifactProvider: CodexGatewayArtifactProvider
         private set
+    lateinit var pythonPackageProvider: BundledPythonPackageProvider
+        private set
     lateinit var codexRuntimeController: CodexRuntimeController
         private set
     lateinit var codexGatewayClient: CodexGatewayClient
@@ -80,6 +100,9 @@ class AlpineCodexApplication : Application() {
         private set
     private lateinit var gatewayCapabilityManager: GatewayCapabilityManager
     private lateinit var gatewayPythonBootstrapper: GatewayPythonBootstrapper
+    private lateinit var configuredRuntimeStarter: ConfiguredRuntimeStarter
+    private lateinit var runtimeRestorePreference: RuntimeRestorePreference
+    private lateinit var initialReconnect: CompletionStage<*>
 
     private lateinit var backgroundController: RuntimeForegroundServiceController
     private var backgroundBinding: RuntimeSubscription? = null
@@ -89,6 +112,20 @@ class AlpineCodexApplication : Application() {
         val runtimeDirectoryName = "alpine-codex-runtime"
         backgroundController = RuntimeForegroundServiceController(this)
         backgroundController.normalizeAfterProcessStart()
+        val workspaceDirectory = File(filesDir, "$runtimeDirectoryName/workspace")
+        val sensitiveStateMigrator = SensitiveStateMigrator.forContext(
+            context = this,
+            workspaceDirectory = workspaceDirectory,
+            runtimeActive = { hasActiveSiblingUidProcess(packageName) },
+        )
+        val sensitiveState = sensitiveStateMigrator.prepare()
+        sensitiveStateNoBackupCommitted = sensitiveState.noBackupCommitted
+        sensitiveStateMigrationFailureCode = sensitiveStateMigrator.lastFailureCode()
+        Log.i(
+            SENSITIVE_STATE_AUDIT_TAG,
+            "committed=$sensitiveStateNoBackupCommitted failure=" +
+                (sensitiveStateMigrationFailureCode ?: "none"),
+        )
 
         runtimeManager = DefaultAndroidAlpineRuntimeFactory().create(
             context = this,
@@ -102,10 +139,10 @@ class AlpineCodexApplication : Application() {
                 ),
                 runtimeDirectoryName = runtimeDirectoryName,
                 workspaceDirectoryName = "workspace",
+                privateDirectoryBinds = sensitiveState.privateDirectoryBinds,
             ),
         )
         runtimeController = RuntimeHostController(runtimeManager)
-        val workspaceDirectory = File(filesDir, "$runtimeDirectoryName/workspace")
         workspaceStore = AppPrivateWorkspaceStore.forDirectory(
             context = this,
             directory = workspaceDirectory,
@@ -118,8 +155,8 @@ class AlpineCodexApplication : Application() {
             ),
         )
         codexHomeDirectory = AppPrivatePathPolicy.ensureDirectory(
-            workspaceDirectory,
-            File(codexWorkspaceDirectory, CodexRuntimePaths.HOME_DIRECTORY),
+            if (sensitiveState.noBackupCommitted) noBackupFilesDir else workspaceDirectory,
+            sensitiveState.codexHomeDirectory,
         )
         codexStagingDirectory = AppPrivatePathPolicy.ensureDirectory(
             workspaceDirectory,
@@ -130,16 +167,29 @@ class AlpineCodexApplication : Application() {
             File(codexWorkspaceDirectory, CodexRuntimePaths.GATEWAY_DIRECTORY),
         )
         gatewaySecurityDirectory = AppPrivatePathPolicy.ensureDirectory(
+            if (sensitiveState.noBackupCommitted) noBackupFilesDir else workspaceDirectory,
+            sensitiveState.gatewayHandoffDirectory,
+        )
+        gatewayWrappedDirectory = AppPrivatePathPolicy.ensureDirectory(
+            if (sensitiveState.noBackupCommitted) noBackupFilesDir else filesDir,
+            sensitiveState.gatewayWrappedDirectory,
+        )
+        conversationStateDirectory = if (sensitiveState.noBackupCommitted) {
+            AppPrivatePathPolicy.ensureDirectory(noBackupFilesDir, sensitiveState.conversationDirectory)
+        } else {
+            filesDir
+        }
+        gatewayTransportDirectory = AppPrivatePathPolicy.ensureDirectory(
             workspaceDirectory,
-            File(codexWorkspaceDirectory, CodexRuntimePaths.SECURITY_DIRECTORY),
+            File(workspaceDirectory, CodexRuntimePaths.TRANSPORT_DIRECTORY),
         )
         grokWorkspaceDirectory = AppPrivatePathPolicy.ensureDirectory(
             workspaceDirectory,
             File(workspaceDirectory, GrokRuntimePaths.PRIVATE_WORKSPACE_DIRECTORY),
         )
         grokHomeDirectory = AppPrivatePathPolicy.ensureDirectory(
-            workspaceDirectory,
-            File(grokWorkspaceDirectory, GrokRuntimePaths.HOME_DIRECTORY),
+            if (sensitiveState.noBackupCommitted) noBackupFilesDir else workspaceDirectory,
+            sensitiveState.grokHomeDirectory,
         )
         grokStagingDirectory = AppPrivatePathPolicy.ensureDirectory(
             workspaceDirectory,
@@ -160,11 +210,30 @@ class AlpineCodexApplication : Application() {
         codexCliArtifactProvider = CodexCliArtifactProvider(this)
         grokCliArtifactProvider = GrokCliArtifactProvider(this)
         codexGatewayArtifactProvider = CodexGatewayArtifactProvider(this)
-        gatewayCapabilityManager = GatewayCapabilityManager(this, gatewaySecurityDirectory)
-        gatewayPythonBootstrapper = GatewayPythonBootstrapper(runtimeController)
-        codexGatewayClient = CodexGatewayClient(GatewayRequestSigner(gatewayCapabilityManager))
+        pythonPackageProvider = BundledPythonPackageProvider(this)
+        gatewayCapabilityManager = GatewayCapabilityManager(
+            context = this,
+            capabilityDirectory = gatewaySecurityDirectory,
+            wrappedDirectory = gatewayWrappedDirectory,
+        )
+        gatewayPythonBootstrapper = GatewayPythonBootstrapper(
+            runtimeController = runtimeController,
+            stagePackagePack = ::stagePythonPackagePack,
+            stageGateway = ::stageCodexGateway,
+        )
+        val gatewayTransport = UnixDomainSocketGatewayTransport(
+            socketFile = File(gatewayTransportDirectory, CodexRuntimePaths.GATEWAY_SOCKET_FILE),
+            expectedPeerUid = Process.myUid(),
+        )
+        codexGatewayClient = CodexGatewayClient(
+            GatewayRequestSigner(gatewayCapabilityManager),
+            gatewayTransport,
+        )
         codexChatBackend = CodexGatewayChatBackend(codexGatewayClient)
-        agentGatewayClient = AgentGatewayClient(GatewayRequestSigner(gatewayCapabilityManager))
+        agentGatewayClient = AgentGatewayClient(
+            GatewayRequestSigner(gatewayCapabilityManager),
+            gatewayTransport,
+        )
         agentChatBackend = AgentGatewayChatBackend(agentGatewayClient)
         codexRuntimeController = CodexRuntimeController(
             runtimeHost = AndroidGatewayRuntimeHost(runtimeManager, runtimeController),
@@ -172,27 +241,70 @@ class AlpineCodexApplication : Application() {
             gatewayClient = agentGatewayClient,
             homeDirectory = CodexRuntimePaths.GUEST_HOME,
             sessionLifecycle = object : GatewaySessionLifecycle {
-                override fun onGatewayStartFailed() = gatewayCapabilityManager.cleanupTransientStart()
-                override fun onRuntimeStopped() = gatewayCapabilityManager.clearAfterRuntimeStop()
+                override fun onGatewayStartFailed() {
+                    gatewayCapabilityManager.cleanupTransientStart()
+                    cleanupGatewaySocket()
+                }
+
+                override fun onRuntimeStopped() {
+                    gatewayCapabilityManager.clearAfterRuntimeStop()
+                    cleanupGatewaySocket()
+                }
             },
         )
-        // This only probes an already-running app-private loopback gateway after process recovery.
-        codexRuntimeController.reconnectIfRuntimeActive()
+        configuredRuntimeStarter = ConfiguredRuntimeStarter(
+            gatewayLifecycle = { codexRuntimeController.currentState().lifecycle },
+            gatewayHealthy = agentGatewayClient::isRuntimeHealthy,
+            stopStaleGateway = ::stopRuntime,
+            startAlpine = ::startAlpineRuntime,
+            preparePython = ::prepareGatewayPython,
+            startGateway = ::startRuntime,
+        )
+        runtimeRestorePreference = RuntimeRestorePreference(this)
+        // This only probes an already-running app-private UDS Gateway after process recovery.
+        initialReconnect = codexRuntimeController.reconnectIfRuntimeActive()
         backgroundBinding = RuntimeBackgroundHostRegistry.bind {
+            runtimeRestorePreference.setRestoreRequested(false)
             codexRuntimeController.stop()
         }
     }
 
-    /** Starts only Alpine so the user can explicitly prepare the one allowlisted Python package. */
+    /** Starts only Alpine so the user can explicitly prepare the APK-contained Python package set. */
     fun startAlpineRuntime() = runtimeController.start(
         RuntimeStartRequest(environment = mapOf("HOME" to CodexRuntimePaths.GUEST_HOME)),
     )
 
-    /** Runs only the fixed python3 availability/simulate/install/verify sequence. */
+    /** Runs only the fixed local-package availability/simulate/install/verify sequence. */
     fun prepareGatewayPython() = gatewayPythonBootstrapper.prepare()
 
-    /** Stages verified assets and launches the fixed loopback gateway in the active Runtime. */
+    /** Stages the locked Python package set from APK assets without repository or network access. */
+    fun stagePythonPackagePack(): StagedPythonPackagePack = pythonPackageProvider.stage(
+        hostStagingDirectory = codexStagingDirectory,
+        guestStagingDirectory = CodexRuntimePaths.GUEST_STAGING,
+    )
+
+    /** Stages verified assets and launches the private UDS Gateway in the active Runtime. */
     fun startRuntime() = codexRuntimeController.start()
+
+    /** Restores the complete installed Runtime → Python → Gateway chain without redoing OAuth. */
+    fun restoreConfiguredRuntime(): CompletionStage<Unit> = initialReconnect
+        .handle { _, _ -> Unit }
+        .thenCompose { ensureRuntimeInstalled() }
+        .thenCompose { configuredRuntimeStarter.start() }
+
+    private fun ensureRuntimeInstalled(): CompletionStage<Unit> = when (
+        runtimeController.currentState().runtimeState.lifecycle
+    ) {
+        RuntimeLifecycleState.NOT_INSTALLED -> runtimeController.install().thenApply { Unit }
+        RuntimeLifecycleState.REPAIR_REQUIRED -> runtimeController.repair().thenApply { Unit }
+        else -> java.util.concurrent.CompletableFuture.completedFuture(Unit)
+    }
+
+    fun shouldRestoreConfiguredRuntime(): Boolean =
+        runtimeRestorePreference.shouldRestore(runtimeController.currentState().runtimeState.lifecycle)
+
+    fun setRuntimeRestoreRequested(requested: Boolean) =
+        runtimeRestorePreference.setRestoreRequested(requested)
 
     /** Stops the gateway first, or the raw Alpine preflight session when no gateway was started. */
     fun stopRuntime() = if (
@@ -250,7 +362,28 @@ class AlpineCodexApplication : Application() {
             grokHomeDirectory = GrokRuntimePaths.GUEST_HOME,
             grokWorkDirectory = GrokRuntimePaths.GUEST_WORK,
             capabilityFile = capabilityFile,
+            socketPath = File(
+                gatewayTransportDirectory,
+                CodexRuntimePaths.GATEWAY_SOCKET_FILE,
+            ).canonicalPath,
+            expectedPeerUid = Process.myUid(),
         )
+    }
+
+    /** Removes only the app-owned socket inode left by a force-terminated PRoot child. */
+    private fun cleanupGatewaySocket() {
+        val socket = File(gatewayTransportDirectory, CodexRuntimePaths.GATEWAY_SOCKET_FILE)
+        val metadata = try {
+            Os.lstat(socket.absolutePath)
+        } catch (_: Exception) {
+            return
+        }
+        if (
+            metadata.st_uid == Process.myUid() &&
+            metadata.st_mode and OsConstants.S_IFMT == OsConstants.S_IFSOCK
+        ) {
+            runCatching { socket.delete() }
+        }
     }
 
     override fun onTerminate() {
@@ -261,5 +394,9 @@ class AlpineCodexApplication : Application() {
         runtimeController.close()
         runtimeManager.close()
         super.onTerminate()
+    }
+
+    private companion object {
+        const val SENSITIVE_STATE_AUDIT_TAG = "SensitiveStateAudit"
     }
 }

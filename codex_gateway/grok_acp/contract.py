@@ -12,6 +12,8 @@ MAX_MODEL_COUNT = 128
 MAX_MODEL_NAME_LENGTH = 256
 MAX_RESPONSE_FIELDS = 128
 AUTH_METHOD_ID = "grok.com"
+CACHED_TOKEN_AUTH_METHOD_ID = "cached_token"
+AUTHENTICATED_METHOD_IDS = frozenset({AUTH_METHOD_ID, CACHED_TOKEN_AUTH_METHOD_ID})
 
 
 class _RequestMethod(str, Enum):
@@ -98,10 +100,26 @@ def parse_initialize_result(result: Mapping[str, Any]) -> GrokInitializeState:
         raise ValueError("grok_initialize_protocol_invalid")
 
     methods = result.get("authMethods")
-    if not isinstance(methods, list) or len(methods) != 1:
+    if not isinstance(methods, list):
         raise ValueError("grok_initialize_auth_invalid")
-    method = methods[0]
-    if not isinstance(method, dict) or method.get("id") != AUTH_METHOD_ID:
+    method_ids: list[str] = []
+    for method in methods:
+        if not isinstance(method, dict):
+            raise ValueError("grok_initialize_auth_invalid")
+        _bounded_mapping(method)
+        method_id = method.get("id")
+        if not isinstance(method_id, str):
+            raise ValueError("grok_initialize_auth_invalid")
+        method_ids.append(method_id)
+    # With the fixed OAuth-only launch policy, the pinned official CLI advertises exactly one of
+    # these ordered shapes. A persisted OAuth session adds ``cached_token`` ahead of the interactive
+    # ``grok.com`` method; rejecting that second valid shape makes an already-signed-in Runtime
+    # impossible to reconnect after the Grok process restarts.
+    method_shape = tuple(method_ids)
+    if method_shape not in (
+        (AUTH_METHOD_ID,),
+        (CACHED_TOKEN_AUTH_METHOD_ID, AUTH_METHOD_ID),
+    ):
         raise ValueError("grok_initialize_auth_invalid")
 
     capabilities = result.get("agentCapabilities")
@@ -122,6 +140,15 @@ def parse_initialize_result(result: Mapping[str, Any]) -> GrokInitializeState:
     if not isinstance(metadata, dict):
         raise ValueError("grok_initialize_metadata_invalid")
     _bounded_mapping(metadata)
+    default_auth_method_id = metadata.get("defaultAuthMethodId")
+    if method_shape == (CACHED_TOKEN_AUTH_METHOD_ID, AUTH_METHOD_ID):
+        if default_auth_method_id not in (None, CACHED_TOKEN_AUTH_METHOD_ID):
+            raise ValueError("grok_initialize_auth_invalid")
+        selected_auth_method_id = CACHED_TOKEN_AUTH_METHOD_ID
+    else:
+        if default_auth_method_id is not None:
+            raise ValueError("grok_initialize_auth_invalid")
+        selected_auth_method_id = AUTH_METHOD_ID
     model_state = metadata.get("modelState")
     if not isinstance(model_state, dict):
         raise ValueError("grok_initialize_models_invalid")
@@ -129,7 +156,7 @@ def parse_initialize_result(result: Mapping[str, Any]) -> GrokInitializeState:
 
     return GrokInitializeState(
         protocol_version="1",
-        auth_method_id=AUTH_METHOD_ID,
+        auth_method_id=selected_auth_method_id,
         models=models,
         current_model_id=current,
         can_load_session=True,

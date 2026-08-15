@@ -61,6 +61,8 @@ data class GatewayLaunchSpec(
     val grokHomeDirectory: String = "/workspace/.alpine-grok/home",
     val grokWorkDirectory: String = "/workspace/.alpine-grok/work",
     val capabilityFile: String = "/workspace/.alpine-codex/security/gateway-capability.v1",
+    val socketPath: String,
+    val expectedPeerUid: Int,
 ) {
     init {
         listOf(
@@ -72,19 +74,30 @@ data class GatewayLaunchSpec(
             grokHomeDirectory,
             grokWorkDirectory,
             capabilityFile,
+            socketPath,
         ).forEach { value ->
             require(GUEST_PATH.matches(value)) { "gateway launch path is invalid" }
         }
+        require(HOST_SOCKET_PATH.matches(socketPath)) { "gateway socket path is invalid" }
+        require(socketPath.toByteArray(Charsets.UTF_8).size <= 107) {
+            "gateway socket path is too long"
+        }
+        require(expectedPeerUid >= 0) { "gateway peer UID is invalid" }
     }
 
     fun command(): String =
         "exec /usr/bin/python3 -m codex_gateway.agent_gateway --codex $codexExecutable " +
             "--grok $grokExecutable --codex-home $homeDirectory --grok-home $grokHomeDirectory " +
             "--grok-work $grokWorkDirectory --workdir $workspaceDirectory " +
-            "--capability-file $capabilityFile"
+            "--capability-file $capabilityFile --socket-path $socketPath --peer-uid $expectedPeerUid"
 
     private companion object {
         val GUEST_PATH = Regex("/[A-Za-z0-9_./+-]+")
+        val HOST_SOCKET_PATH = Regex(
+            "/data/(?:user/[0-9]+|data)/[A-Za-z0-9._-]{1,128}/files/" +
+                "alpine-codex-runtime/workspace/" +
+                "\\.gateway/gateway\\.sock",
+        )
     }
 }
 

@@ -39,7 +39,7 @@ class AgentGatewayClientTest {
             Response.json("""{"agent_id":"grok","status":"logged_out"}"""),
         ),
     ).use { server ->
-        val client = AgentGatewayClient()
+        val client = AgentGatewayClient(transport = LoopbackTestGatewayTransport)
         assertEquals(AgentId.CODEX, client.health().selectedAgent)
         assertEquals(listOf(AgentId.CODEX, AgentId.GROK), client.agents().map { it.agentId })
         assertEquals(AgentId.GROK, client.selectAgent(AgentId.GROK).selectedAgent)
@@ -91,7 +91,7 @@ class AgentGatewayClientTest {
             listOf(Response.json("""{"agent_id":"codex","authenticated":true,"requires_auth":false}""")),
         ).use {
             val error = assertThrows(GatewayClientException::class.java) {
-                AgentGatewayClient().account(AgentId.GROK)
+                AgentGatewayClient(transport = LoopbackTestGatewayTransport).account(AgentId.GROK)
             }
             assertEquals(GatewayClientErrorCode.MALFORMED_RESPONSE, error.errorCode)
         }
@@ -105,7 +105,7 @@ class AgentGatewayClientTest {
         ).use {
             val error = assertThrows(GatewayClientException::class.java) {
                 runBlocking {
-                    AgentGatewayClient().stream(
+                    AgentGatewayClient(transport = LoopbackTestGatewayTransport).stream(
                         AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "fixture"),
                     ).toList()
                 }
@@ -134,7 +134,7 @@ class AgentGatewayClientTest {
             ).use {
                 assertThrows(GatewayClientException::class.java) {
                     runBlocking {
-                        AgentGatewayClient().stream(
+                        AgentGatewayClient(transport = LoopbackTestGatewayTransport).stream(
                             AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "fixture"),
                         ).toList()
                     }
@@ -154,7 +154,7 @@ class AgentGatewayClientTest {
         ).use {
             assertThrows(GatewayClientException::class.java) {
                 runBlocking {
-                    AgentGatewayClient().stream(
+                    AgentGatewayClient(transport = LoopbackTestGatewayTransport).stream(
                         AgentGatewayChatRequest(AgentId.CODEX, null, "model-a", "fixture"),
                     ).toList()
                 }
@@ -185,7 +185,7 @@ class AgentGatewayClientTest {
             ).use { server ->
                 val error = assertThrows(GatewayClientException::class.java) {
                     runBlocking {
-                        AgentGatewayClient().stream(
+                        AgentGatewayClient(transport = LoopbackTestGatewayTransport).stream(
                             AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "fixture"),
                         ).toList()
                     }
@@ -213,7 +213,7 @@ class AgentGatewayClientTest {
     ).use { server ->
         val error = assertThrows(GatewayClientException::class.java) {
             runBlocking {
-                AgentGatewayClient().stream(
+                AgentGatewayClient(transport = LoopbackTestGatewayTransport).stream(
                     AgentGatewayChatRequest(AgentId.GROK, null, "model-a", "one user prompt"),
                 ).toList()
             }

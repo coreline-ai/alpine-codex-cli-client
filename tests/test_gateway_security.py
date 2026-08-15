@@ -10,7 +10,9 @@ import threading
 import unittest
 
 from codex_gateway.security import (
+    BoundedSecurityCounters,
     GatewayAuthenticationError,
+    MAX_SECURITY_COUNTER,
     SessionCapabilityVerifier,
     load_one_time_capability,
 )
@@ -68,7 +70,12 @@ class SessionCapabilityVerifierTest(unittest.TestCase):
             )
 
     def test_nonce_cache_is_thread_safe_and_bounded(self):
-        verifier = SessionCapabilityVerifier(SECRET, now=lambda: NOW, max_nonces=16)
+        verifier = SessionCapabilityVerifier(
+            SECRET,
+            now=lambda: NOW,
+            nonce_now=lambda: NOW,
+            max_nonces_per_bucket=16,
+        )
         results = []
 
         def submit(index):
@@ -88,6 +95,64 @@ class SessionCapabilityVerifierTest(unittest.TestCase):
             worker.join()
         self.assertEqual(16, sum(results))
         self.assertEqual(16, verifier.nonce_count())
+
+    def test_nonce_buckets_recover_without_evicting_live_replay_entries(self):
+        clock = [NOW]
+        verifier = SessionCapabilityVerifier(
+            SECRET,
+            now=lambda: NOW,
+            nonce_now=lambda: clock[0],
+            nonce_ttl_seconds=20,
+            nonce_bucket_seconds=5,
+            max_nonces_per_bucket=2,
+        )
+        first = bytes(range(16))
+        second = bytes(range(16, 32))
+        rejected = bytes(range(32, 48))
+        verifier.authorize("GET", "/healthz", headers("GET", "/healthz", b"", nonce=first), b"")
+        verifier.authorize("GET", "/healthz", headers("GET", "/healthz", b"", nonce=second), b"")
+        with self.assertRaises(GatewayAuthenticationError):
+            verifier.authorize(
+                "GET", "/healthz", headers("GET", "/healthz", b"", nonce=rejected), b""
+            )
+
+        clock[0] += 5
+        next_bucket = bytes(range(48, 64))
+        verifier.authorize(
+            "GET", "/healthz", headers("GET", "/healthz", b"", nonce=next_bucket), b""
+        )
+        with self.assertRaises(GatewayAuthenticationError):
+            verifier.authorize(
+                "GET", "/healthz", headers("GET", "/healthz", b"", nonce=first), b""
+            )
+        self.assertEqual(3, verifier.nonce_count())
+        telemetry = verifier.telemetry_snapshot()
+        self.assertEqual(1, telemetry["capacity_rejected"])
+        self.assertEqual(1, telemetry["replay_rejected"])
+        self.assertEqual(2, telemetry["auth_rejected"])
+
+    def test_invalid_signatures_cannot_consume_nonce_capacity(self):
+        verifier = SessionCapabilityVerifier(
+            SECRET,
+            now=lambda: NOW,
+            nonce_now=lambda: NOW,
+            max_nonces_per_bucket=2,
+        )
+        for index in range(32):
+            value = headers("GET", "/healthz", b"", nonce=index.to_bytes(16, "big"))
+            value["x-alpine-signature"] = ("A" * 43,)
+            with self.assertRaises(GatewayAuthenticationError):
+                verifier.authorize("GET", "/healthz", value, b"")
+        self.assertEqual(0, verifier.nonce_count())
+        self.assertEqual(0, verifier.telemetry_snapshot()["capacity_rejected"])
+
+    def test_security_counters_have_fixed_schema_and_saturate(self):
+        counters = BoundedSecurityCounters(("rejected",))
+        counters._values["rejected"] = MAX_SECURITY_COUNTER
+        counters.increment("rejected")
+        self.assertEqual(MAX_SECURITY_COUNTER, counters.snapshot()["rejected"])
+        with self.assertRaises(ValueError):
+            counters.increment("request-content")
 
     def test_one_time_file_requires_owner_modes_and_is_unlinked(self):
         with tempfile.TemporaryDirectory() as raw:

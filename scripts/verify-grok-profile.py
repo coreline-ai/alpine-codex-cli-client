@@ -11,14 +11,14 @@ import re
 import zipfile
 
 
-PROFILE_RELATIVE = Path("grok-cli-pack/src/debug/assets/grok-profile/chat-only.md")
-LOCK_RELATIVE = Path("grok-cli-pack/src/debug/assets/grok-profile/chat-only.lock.json")
+PROFILE_RELATIVE = Path("grok-cli-pack/src/main/assets/grok-profile/chat-only.md")
+LOCK_RELATIVE = Path("grok-cli-pack/src/main/assets/grok-profile/chat-only.lock.json")
 APK_PROFILE = "assets/grok-profile/chat-only.md"
 APK_LOCK = "assets/grok-profile/chat-only.lock.json"
 EXPECTED_PROFILE_NAME = "alpine-chat-only"
 EXPECTED_CLI_VERSION = "1.0.0"
 EXPECTED_ALLOWED_SENTINEL = ("task",)
-EXPECTED_DENIED_TOOLS = ("search_tool", "use_tool")
+EXPECTED_DENIED_TOOLS = ("task", "search_tool", "use_tool")
 EXPECTED_TOP_LEVEL_KEYS = {
     "name",
     "description",

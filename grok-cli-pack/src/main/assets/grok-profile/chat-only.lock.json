@@ -2,7 +2,7 @@
   "schema_version": 1,
   "profile_name": "alpine-chat-only",
   "file_name": "chat-only.md",
-  "size": 561,
-  "sha256": "028b651de55ab2a979151caa2574b4a3c0298ae75d1fcb980ad586c43bd4a301",
+  "size": 570,
+  "sha256": "5c7cf4ac7fb9035f2675af836b72578f7c6811357ce0852e70b4c0c2dc146c72",
   "grok_cli_version": "1.0.0"
 }

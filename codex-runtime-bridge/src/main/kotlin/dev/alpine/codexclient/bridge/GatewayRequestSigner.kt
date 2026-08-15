@@ -13,7 +13,7 @@ fun interface GatewaySecretProvider {
     fun currentSecret(): ByteArray
 }
 
-/** Pure canonical-v1 HMAC signer shared by every loopback management and SSE request. */
+/** Pure canonical-v1 HMAC signer shared by every private-carrier management and SSE request. */
 class GatewayRequestSigner(
     private val secretProvider: GatewaySecretProvider,
     private val epochSeconds: () -> Long = { Instant.now().epochSecond },

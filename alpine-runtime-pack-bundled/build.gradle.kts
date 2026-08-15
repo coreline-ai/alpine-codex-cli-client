@@ -49,7 +49,7 @@ val lockedArtifacts = mapOf(
     "src/main/jniLibs/arm64-v8a/libproot-loader.so" to
         "12d2b63e897fd91a334fce23edea5d2419cae4d5fd2a369f05d03ab75682add0",
     "src/main/resources/META-INF/alpine-runtime/sbom.spdx.json" to
-        "678ed604a09a22d5e63c3f2289225de0a85b7c868f05e78817f7a54e4d1d42bc",
+        "f9e0842e72e5a3ff35a89ec1d46ced293844d5538de0df1a5a5dfa4134947b89",
 )
 
 fun sha256(file: File): String {
@@ -107,8 +107,21 @@ val verifyBundledRuntimeArtifacts by tasks.registering {
     }
 }
 
+val verifyRuntimeSupplyChain by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Verifies the rootfs package inventory and deterministic SPDX SBOM."
+    workingDir(rootProject.projectDir)
+    commandLine(
+        providers.environmentVariable("PYTHON").orElse("python3").get(),
+        rootProject.file("scripts/verify-runtime-supply-chain.py").absolutePath,
+        "--project-root",
+        rootProject.projectDir.absolutePath,
+    )
+}
+
 tasks.named("preBuild") {
     dependsOn(verifyBundledRuntimeArtifacts)
+    dependsOn(verifyRuntimeSupplyChain)
 }
 
 kotlin {

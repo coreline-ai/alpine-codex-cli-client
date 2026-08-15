@@ -1,37 +1,72 @@
 # Grok Phase 9 handoff
 
-Date: `2026-08-14 KST`
+Date: `2026-08-15 KST`
 
-이 문서는 현재 작업 트리와 Samsung secure-debug 상태를 다음 개발자에게 넘기기 위한 기준선이다.
-실제 계정 정보, OAuth URL/challenge, model 내용, prompt/response, raw log와 capture는 포함하지 않는다.
+이 문서는 현재 누적 작업 트리와 Samsung secure-debug 검증 상태의 인계 기준선이다. 실제 계정
+정보, OAuth URL/challenge, model 내용, prompt/response, raw log와 capture는 포함하지 않는다.
 
 ## 현재 인계 요약
 
 | 항목 | 현재 상태 |
 |---|---|
-| 제품 경로 | 공식 Grok CLI `1.0.0` → pinned ACP → app-private Python Gateway → Android Compose |
-| 최신 수정 | Grok account UI의 exact `accounts.x.ai` host 허용, 클릭 즉시 `LOGIN STARTING` 진행 표시 |
-| secure APK | `161137250` bytes, SHA-256 `1a396b48ad1035250f0792541079689e9c4f76006436f0eb8495044d7c18a7f1` |
-| 설치 방식 | `dev.alpine.codexclient.debug`에 데이터 보존 update-install; version code `2`, non-debuggable 유지 |
-| Samsung 상태 | `SM-S931N`, API 36, app/PRoot/Python/Grok/Codex `1/1/1/1/0` |
-| 전면 UI | Grok 선택, `DEVICE OAUTH`, 활성 `Grok 로그인` 버튼 |
-| 실제 OAuth | host 보정 뒤에는 시작하지 않음; 브라우저 계정 승인이 다음 사용자 동작 |
-| 실제 모델/턴 | dynamic catalog, 실제 1턴, Stop, lifecycle, logout, cleanup 미실행 |
+| 제품 경로 | 공식 Grok CLI `1.0.0` -> pinned ACP -> app-private Python Gateway -> Android Compose |
+| secure APK | `161150250` bytes, SHA-256 `d104be3f1d3e6aff21953356fe41e45e1e30bd2ca3832406f82783cc407ca769`, version code 2 |
+| 설치 방식 | 같은 서명/패키지의 `install -r`; app-private 데이터와 OAuth 상태 보존 |
+| Samsung 상태 | 승인된 `SM-S931N`에서 앱/PRoot/Python/Grok/Codex `1/1/1/1/0`; 다른 연결 기기 미변경 |
+| 실제 OAuth/모델 | 공식 브라우저 OAuth 완료, authenticated Boolean과 live model readiness 확인 |
+| 실제 채팅 | 승인된 합성 Grok turn과 content-free chat audit 완료 |
+| 복구/전환 | force-stop 2회, background/foreground, Codex 무과금 선택 후 Grok 재선택 완료 |
+| 실제 Stop | 최종 dispatch `1`, terminal `1`, cancel `1`, retry `none`, profile `clean` |
 
-## 완료된 구현과 검증
+Runtime/Gateway의 실행 의도는 credential과 분리된 app-private Boolean으로 유지한다. 앱 프로세스
+종료나 APK update-install 뒤 foreground가 되면 Runtime 설치/복구, Python 실재 확인, Gateway
+시작을 자동 직렬화하며 OAuth `authenticate`를 다시 호출하지 않는다. 사용자가 `Runtime 종료`나
+foreground 알림의 중지를 명시적으로 누르면 자동 복구가 꺼지고 다음 수동 시작 때 다시 켜진다.
 
-- Gateway와 Android는 Grok 로그인 URL에 exact `auth.x.ai`와 `accounts.x.ai`만 허용한다.
-  subdomain/suffix lookalike, userinfo, 비표준 port, fragment와 non-HTTPS URL은 계속 차단한다.
-- 로그인 시작 중 `refreshing` 상태를 `LOGIN STARTING`, progress indicator,
-  `로그인 주소 요청 중`, 비활성 `로그인 준비 중…`으로 표시한다.
-- 공식 CLI의 `authenticate`는 사용자 action당 한 번만 시작하고, URL 준비 polling은 동일
-  sequence와 전체 15초 deadline 안에서만 수행한다.
-- Python 전체 `103/103` PASS.
-- 전체 JVM/Android unit, `lintDebug`, `lintSecureDebug`, debug/test/secure APK build PASS.
-- Samsung Android 16의 credential-free `AgentChatSurfaceInstrumentedTest` `6/6` PASS.
-- Codex/Grok protocol, clean-room, Grok artifact/profile/ACP, secure APK, sensitive evidence,
-  source map, Runtime manifest 검증 PASS.
-- `git diff --check`와 sensitive evidence scan PASS.
+## 완료된 핵심 수정
+
+### Persisted OAuth와 브라우저 복귀
+
+- 공식 OAuth-only `authMethods`의 신규 로그인 및 `cached_token` shape만 허용한다. 그 밖의
+  method, 순서, 부분 shape는 fail-closed한다.
+- `cached_token`은 READY 공개 전에 공식 ACP 동작과 같은 eager authenticate를 거치며
+  account/profile 응답 본문은 저장하지 않는다.
+- 브라우저 완료 직후 `auth/info.methodId` 반영 지연은 같은 사용자 attempt 안에서 최대 15초
+  content-free bounded polling으로 확인한다. 자동 재인증은 하지 않는다.
+- 브라우저에서 앱으로 복귀하면 request status와 account Boolean을 즉시 reconciliation하고,
+  authenticated이면 pending UI를 닫고 model catalog를 다시 로드한다.
+
+### Session과 Runtime 복구
+
+- Android history와 Grok ACP binding을 분리했다. Gateway는 prompt, response, OAuth 값 없이
+  bounded conversation-to-session binding만 private Grok home에 `0600`으로 저장한다.
+- 같은 generation은 `session/resume`, Gateway 재생성은 공식 `session/load`를 사용한다.
+- Runtime start future는 Host session/state publication 후에만 완료되고, 복구 health probe가
+  실패하면 Runtime -> Python -> Gateway chain을 완전히 재구성한다.
+- loopback listener는 `SO_REUSEADDR`만 사용해 closed port의 `TIME_WAIT` 재기동을 허용하고,
+  두 번째 live listener는 계속 거부한다.
+
+### Stop terminal 계약
+
+- Grok CLI 1.0.0은 `session/cancel`을 승인한 뒤에도 outstanding `session/prompt` RPC를 Android
+  SSE read limit보다 오래 유지할 수 있었다.
+- `GrokAgentAdapter.interrupt()`는 cancel 승인 직후 redacted profile/prompt counter를 갱신하고
+  `turn_interrupted` terminal을 정확히 한 번 게시한다. 늦은 prompt/notification은 기존
+  `active.terminal` guard가 차단한다.
+- Android `AgentTurnStateAudit`는 내용 없이 request-bound `started`와 실제
+  `stop_requested dispatched` checkpoint만 기록한다. terminal line은 기존
+  `AgentTurnAudit` 검증기를 그대로 통과해야 한다.
+
+## 검증 기준선
+
+| Gate | 결과 |
+|---|---|
+| Python | PASS: 전체 116 tests; non-socket 93 + loopback HTTP/HMAC 23 |
+| Android/JVM | PASS: Runtime Host, debug/secureDebug unit, lint, APK 및 test APK; 516 Gradle tasks |
+| Grok | PASS: protocol, clean-room, CLI artifact, locked chat-only profile, ACP contract |
+| Security | PASS: non-debuggable secure APK audit, sensitive evidence scanner |
+| Reference | PASS: source map와 Runtime manifest/adaptation gate |
+| Formatting | PASS: `git diff --check` 기준 |
 
 전체 credential-free 검증 명령:
 
@@ -39,65 +74,59 @@ Date: `2026-08-14 KST`
 sh scripts/verify-secure-debug-milestone.sh
 ```
 
-## 다음 작업 순서
+이번 검증 중 reference 저장소의 live working tree가 다른 작업에 의해 변경되고 있었으므로 문서화된
+기준 commit `b81a7d8ee12af72ff95180bfeadabe68e5be950e`의 immutable snapshot을
+`ALPINE_REFERENCE_REPO`로 지정해 재현했다. source-map gate는 실제 import 대상만 비교하도록
+정정했고, Runtime Host의 intentional adaptation 두 건은 destination hash와 회귀 근거를 manifest에
+동기화했다. live reference working tree는 수정하거나 정리하지 않았다.
 
-1. 입력 직전에 approved Samsung alias, target package focus와
-   app/PRoot/Python/Grok/Codex `1/1/1/1/0`을 다시 확인한다.
-2. 사용자가 앱의 `Grok 로그인`을 정확히 한 번 누른다.
-3. 앱에서 `LOGIN STARTING` 진행 상태가 즉시 표시되고 공식 xAI 브라우저로 전환되는지만 확인한다.
-4. 브라우저 승인은 사용자가 직접 완료한다. 앱에서는 `authenticated=true` Boolean만 확인한다.
-5. dynamic model catalog가 1개 이상이며 선택값이 실제 catalog에 포함되는지만 확인한다.
-6. 금지 profile event 5종이 모두 0인 상태에서만 별도 승인된 무민감 실제 1턴과 Stop 검증으로
-   진행한다.
-7. lifecycle/Codex 무과금 회귀/Grok 재선택 뒤, 별도 승인을 받아 Grok logout과 Runtime cleanup을
-   수행한다.
+## 실제 Samsung 완료 상태
 
-실제 turn은 [Samsung secure-debug runbook](samsung-grok-secure-debug-runbook.md)의 audit 절차를
-따르고, 결과는 [redacted E2E evidence](samsung-grok-secure-debug-e2e.md)에 count와 enum만 기록한다.
+1. 데이터 보존 update-install 뒤 OAuth, live model readiness, history, composer를 복구했다.
+2. 승인된 합성 Grok 채팅과 content-free chat audit를 완료했다.
+3. immediate force-stop/relaunch 2회 뒤 process 단일성, history, composer, official
+   `session/load` 기반 후속 turn을 확인했다.
+4. background/foreground 뒤 자동 prompt 없이 인증/history/composer와 `1/1/1/1/0`을 유지했다.
+5. Codex를 선택해 readiness까지만 확인하고 실제 메시지를 보내지 않은 뒤 Grok을 재선택했다.
+6. pre-fix 실제 Stop에서 cancel-ack 후 terminal 지연을 재현하고 위 결함을 수정했다.
+7. 최종 승인된 Stop은 state checkpoint와 terminal audit 모두 통과했고, HOME 복귀 후 history와
+   composer가 복구됐다.
 
-## 중단 및 승인 경계
+세부 redacted 근거는 [Samsung Grok E2E evidence](samsung-grok-secure-debug-e2e.md), 재현 절차는
+[Samsung secure-debug runbook](samsung-grok-secure-debug-runbook.md)을 따른다.
 
-- OAuth 실패·취소·만료 시 자동 재시작하거나 두 번 누르지 않는다.
-- 실제 Codex 유료 turn과 Grok logout은 각각 별도 사용자 승인이 필요하다.
-- uninstall, clear-data, credential 파일 읽기/삭제, release signing, 다른 기기·앱 mutation은 금지한다.
-- OAuth 시작 뒤 screenshot, screen recording, UI hierarchy dump, broad logcat, browser 내용 기록을
-  하지 않는다.
-- prompt 자동 retry/replay 또는 다른 Agent fallback이 관찰되면 즉시 중단한다.
+## 잔여 항목과 승인 경계
+
+- [x] official Grok Device OAuth 성공
+- [x] live dynamic model catalog 준비/선택
+- [x] 실제 Grok streaming turn과 content-free chat audit
+- [x] force-stop, background/foreground 안전 복구
+- [x] Codex 무과금 선택과 Grok 재선택
+- [x] 실제 Grok Stop과 content-free stop audit
+- [ ] 별도 사용자 승인 후 official Grok logout
+- [ ] 별도 사용자 승인 후 Runtime 종료와 관련 child process `0`
+- [ ] 누적 working tree 검토 후 별도 요청에 따른 Git commit/push
+
+logout, Runtime 종료, uninstall, clear-data, credential 파일 읽기/삭제, release signing, 다른
+기기/app mutation은 이번 구현 범위에서 수행하지 않았다. 실제 Codex 유료 turn, prompt 자동
+retry/replay, 다른 Agent fallback도 발생하지 않았다.
 
 ## Git 인계 상태
 
-- Branch: `codex/implement-grok-agent`
-- 기능 통합 commit: `7c0f88a` (`feat: finalize Grok agent secure debug client`)
-- Base: `origin/main` `72e88c1`
-- 기능 통합 commit에는 Phase 9 후속 수정, Alpine Agent 테마, 회귀 테스트와 handoff 문서가
-  함께 포함됐다.
-- 2026-08-14 사용자 요청으로 기존 no-push 제한이 해제되어, 이 문서를 포함한 최종 HEAD를
-  `origin/main`에 fast-forward push했다.
-- 동일 이름의 remote feature branch는 만들지 않았다.
-- 기존 사용자 변경을 분리하거나 되돌리기 위해 reset/stash/rebase하지 않는다.
-
-인계 시 `git status --short --branch`가 clean이고 `git rev-parse HEAD origin/main`이 동일한지
-확인한다. 실제 OAuth·model·유료 turn·logout gate는 아래 완료되지 않은 Gate로 계속 추적한다.
+- Branch: `main`
+- 작업 시작 기준 HEAD와 `origin/main`: `ec94f99e45982af8fffc6d1b9e96b7362c2c3d43`
+- 현재 변경은 Phase 9 누적 구현과 이번 lifecycle/Stop/reference/document 수정이 함께 있는
+  uncommitted working tree다.
+- reset, stash, rebase, checkout으로 사용자 변경을 분리하거나 되돌리지 않았다.
+- 이번 구현 요청에서는 commit, pull, push를 수행하지 않았다.
 
 ## 주요 파일
 
-- [Grok URL 검증](../codex_gateway/agents/grok.py)
-- [Android URL 검증·로그인 상태](../app/src/main/java/dev/alpine/codexclient/AgentChatViewModel.kt)
-- [로그인 진행 UI](../app/src/main/java/dev/alpine/codexclient/AgentChatScreen.kt)
-- [Gateway 회귀](../tests/test_grok_agent_adapter.py)
-- [Compose UI 회귀](../app/src/androidTest/java/dev/alpine/codexclient/AgentChatSurfaceInstrumentedTest.kt)
-- [Agent 워크플로 회귀](../app/src/androidTest/java/dev/alpine/codexclient/AgentChatWorkflowInstrumentedTest.kt)
-- [실행 계획](../dev-plan/implement_20260812_130217.md)
-
-## 완료되지 않은 Gate
-
-- [ ] host 보정 build에서 official Grok Device OAuth 성공
-- [ ] actual dynamic model catalog 표시·선택
-- [ ] 실제 Grok streaming 1턴과 content-free chat audit
-- [ ] 별도 Stop과 content-free stop audit
-- [ ] background/foreground와 force-stop 안전 복구
-- [ ] Codex 무과금 회귀와 Grok 재선택
-- [ ] 별도 승인 후 official Grok logout
-- [ ] Runtime 종료 후 관련 child process 0
-- [x] 누적 working tree 검토 후 기능 통합 commit `7c0f88a`
-- [x] 사용자 명시 요청 후 최종 HEAD를 `origin/main`에 fast-forward push
+- [Grok adapter와 Stop 계약](../codex_gateway/agents/grok.py)
+- [Android Agent 상태와 audit 연결](../app/src/main/java/dev/alpine/codexclient/AgentChatViewModel.kt)
+- [Content-free turn audit](../app/src/main/java/dev/alpine/codexclient/AgentTurnAudit.kt)
+- [Gateway regression](../tests/test_grok_agent_adapter.py)
+- [Android audit regression](../app/src/test/java/dev/alpine/codexclient/AgentTurnAuditTest.kt)
+- [Reference source map](reference-source-map.md)
+- [Reference Runtime adaptations](reference-runtime-adaptations.md)
+- [현재 개발 계획](../dev-plan/implement_20260815_070753.md)

@@ -40,7 +40,7 @@ class CodexGatewayClientTest {
             Response.json("{\"object\":\"list\",\"data\":[{\"id\":\"model-a\",\"display_name\":\"Model A\",\"is_default\":true}]}"),
         ),
     ).use { server ->
-        val client = CodexGatewayClient()
+        val client = CodexGatewayClient(transport = LoopbackTestGatewayTransport)
         assertEquals("ready", client.health().codex)
         assertFalse(client.account().authenticated)
         assertEquals(2, client.startDeviceLogin().pollIntervalSeconds)
@@ -60,28 +60,28 @@ class CodexGatewayClientTest {
     fun `cancels a recovered login without exposing its opaque identifier`() = FakeGatewayServer(
         listOf(Response.json("{\"status\":\"cancelled\",\"login_id\":\"ignored\"}")),
     ).use { server ->
-        CodexGatewayClient().cancelActiveDeviceLogin()
+        CodexGatewayClient(transport = LoopbackTestGatewayTransport).cancelActiveDeviceLogin()
         assertEquals(listOf("POST /internal/codex/login/active/cancel"), server.requests)
     }
 
     @Test
     fun `rejects HTTP error oversized malformed and invalid utf8 data fail closed`() {
         FakeGatewayServer(listOf(Response.json("{\"error\":{\"code\":\"authentication_required\"}}", status = 401))).use {
-            val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient().models() }
+            val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient(transport = LoopbackTestGatewayTransport).models() }
             assertEquals(GatewayClientErrorCode.HTTP_ERROR, error.errorCode)
             assertEquals(401, error.statusCode)
             assertEquals("authentication_required", error.gatewayCode)
         }
         FakeGatewayServer(listOf(Response.raw("application/json", ByteArray(129 * 1024) { 'x'.code.toByte() }))).use {
-            val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient().health() }
+            val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient(transport = LoopbackTestGatewayTransport).health() }
             assertEquals(GatewayClientErrorCode.RESPONSE_TOO_LARGE, error.errorCode)
         }
         FakeGatewayServer(listOf(Response.raw("application/json", byteArrayOf('{'.code.toByte(), '\ufffd'.code.toByte(), '}'.code.toByte())))).use {
-            val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient().health() }
+            val error = assertThrows(GatewayClientException::class.java) { CodexGatewayClient(transport = LoopbackTestGatewayTransport).health() }
             assertEquals(GatewayClientErrorCode.MALFORMED_RESPONSE, error.errorCode)
         }
         val error = assertThrows(GatewayClientException::class.java) {
-            runBlocking { CodexGatewayClient().stream(GatewayChatRequest(null, "model-a", "x".repeat(17 * 1024))).toList() }
+            runBlocking { CodexGatewayClient(transport = LoopbackTestGatewayTransport).stream(GatewayChatRequest(null, "model-a", "x".repeat(17 * 1024))).toList() }
         }
         assertEquals(GatewayClientErrorCode.REQUEST_TOO_LARGE, error.errorCode)
     }
@@ -98,7 +98,7 @@ class CodexGatewayClientTest {
         ),
     ).use { server ->
         val events = runBlocking {
-            CodexGatewayClient()
+            CodexGatewayClient(transport = LoopbackTestGatewayTransport)
                 .stream(GatewayChatRequest("conversation-1", "model-a", "hello"))
                 .toList()
         }
@@ -119,7 +119,7 @@ class CodexGatewayClientTest {
         ),
     ).use { server ->
         val events = runBlocking {
-            CodexGatewayChatBackend(CodexGatewayClient())
+            CodexGatewayChatBackend(CodexGatewayClient(transport = LoopbackTestGatewayTransport))
                 .startTurn(GatewayChatRequest("conversation-1", "model-a", "hello"))
                 .events
                 .toList()
@@ -145,7 +145,7 @@ class CodexGatewayClientTest {
             Response.json("{\"status\":\"interrupt_requested\"}"),
         ),
     ).use { server ->
-        val client = CodexGatewayClient()
+        val client = CodexGatewayClient(transport = LoopbackTestGatewayTransport)
         val control = client.newStreamControl()
         val receivedStart = CompletableFuture<Unit>()
         runBlocking {
@@ -175,7 +175,7 @@ class CodexGatewayClientTest {
             Response.json("{\"runtime\":\"ready\",\"gateway\":\"ready\",\"codex\":\"ready\"}"),
         ),
     ).use { server ->
-        val client = CodexGatewayClient()
+        val client = CodexGatewayClient(transport = LoopbackTestGatewayTransport)
         val control = client.newStreamControl()
         control.observeRequestId("chat-1")
         assertTrue(control.stop(client))
@@ -209,7 +209,7 @@ class CodexGatewayClientTest {
         CodexRuntimeController(
             runtimeHost = host,
             stager = GatewayArtifactStager { launchSpec() },
-            gatewayClient = CodexGatewayClient(),
+            gatewayClient = CodexGatewayClient(transport = LoopbackTestGatewayTransport),
             homeDirectory = "/workspace/.alpine-codex/home",
         ).use { controller ->
             val starting = controller.start()
@@ -236,7 +236,7 @@ class CodexGatewayClientTest {
         CodexRuntimeController(
             runtimeHost = host,
             stager = GatewayArtifactStager { launchSpec() },
-            gatewayClient = CodexGatewayClient(),
+            gatewayClient = CodexGatewayClient(transport = LoopbackTestGatewayTransport),
             homeDirectory = "/workspace/.alpine-codex/home",
         ).use { controller ->
             val error = assertThrows(ExecutionException::class.java) {
@@ -258,7 +258,7 @@ class CodexGatewayClientTest {
         CodexRuntimeController(
             runtimeHost = host,
             stager = GatewayArtifactStager { launchSpec() },
-            gatewayClient = CodexGatewayClient(),
+            gatewayClient = CodexGatewayClient(transport = LoopbackTestGatewayTransport),
             homeDirectory = "/workspace/.alpine-codex/home",
         ).use { controller ->
             assertEquals(
@@ -276,6 +276,9 @@ class CodexGatewayClientTest {
         gatewayRootDirectory = "/workspace/.alpine-codex/gateway",
         homeDirectory = "/workspace/.alpine-codex/home",
         workspaceDirectory = "/workspace",
+        socketPath = "/data/user/0/dev.alpine.codexclient.debug/files/" +
+            "alpine-codex-runtime/workspace/.gateway/gateway.sock",
+        expectedPeerUid = 12345,
     )
 
     private data class Response(

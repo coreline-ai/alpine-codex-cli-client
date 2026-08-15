@@ -10,6 +10,7 @@ skills: []
 tools:
   - task
 disallowedTools:
+  - task
   - search_tool
   - use_tool
 mcpServers: []
