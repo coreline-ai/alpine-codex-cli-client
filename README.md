@@ -89,9 +89,22 @@ Gateway와 두 공식 CLI의 실행 환경을 제공하도록 설계되었습니
 
 ## 📱 실행 화면
 
-| Codex Device OAuth | Codex·Grok Agent 선택 | Local Runtime 상태 |
-|:---:|:---:|:---:|
-| <img src="docs/images/app-screen-codex-oauth.png" width="100%" alt="Codex Device OAuth 로그인 화면" /> | <img src="docs/images/app-screen-agent-selector.png" width="100%" alt="Codex와 Grok Agent 선택 화면" /> | <img src="docs/images/app-screen-runtime-status.png" width="100%" alt="Alpine과 Gateway Local Runtime 상태 화면" /> |
+<table>
+  <thead>
+    <tr>
+      <th width="33.33%">Codex Device OAuth</th>
+      <th width="33.33%">Codex·Grok Agent 선택</th>
+      <th width="33.33%">Local Runtime 상태</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="33.33%" align="center" valign="top"><img src="docs/images/app-screen-codex-oauth.png" width="300" alt="Codex Device OAuth 로그인 화면" /></td>
+      <td width="33.33%" align="center" valign="top"><img src="docs/images/app-screen-agent-selector.png" width="300" alt="Codex와 Grok Agent 선택 화면" /></td>
+      <td width="33.33%" align="center" valign="top"><img src="docs/images/app-screen-runtime-status.png" width="300" alt="Alpine과 Gateway Local Runtime 상태 화면" /></td>
+    </tr>
+  </tbody>
+</table>
 
 > [!NOTE]
 > Samsung `SM-S931N` 실기기에서 촬영한 동일 Compose UI입니다. 제품 APK의
