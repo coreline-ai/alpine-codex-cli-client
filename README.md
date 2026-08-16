@@ -2,7 +2,8 @@
 
 # 🏔️ Alpine Agent CLI Client
 
-<img src="docs/images/readme-hero-agent-runtime.webp" width="100%" alt="Android 앱 안에서 Codex와 Grok을 실행하는 Alpine Agent CLI Client" />
+<img src="docs/images/readme-hero-agent-runtime.webp" width="0%" alt="Android 앱 안에서 Codex와 Grok을 실행하는 Alpine Agent CLI Client" />
+<img width="2752" height="1536" alt="내_폰_안의_모바일_에이전트" src="https://github.com/user-attachments/assets/0a17ed57-ae98-494d-a269-31fb65048d5a" />
 
 ### 공식 AI CLI를 Android 안에서 더 작고, 더 사적으로, 더 검증 가능하게
 
