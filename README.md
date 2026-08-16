@@ -1,112 +1,245 @@
-# Alpine Agent CLI Client
+<div align="center">
 
-![Android 앱 안에서 Codex와 Grok을 실행하는 Alpine Agent CLI Client](docs/images/readme-hero-agent-runtime.webp)
+# 🏔️ Alpine Agent CLI Client
 
-**한국어 요약** — 공식 **OpenAI Codex CLI**와 **xAI Grok CLI**를 Android 앱 내부의
-app-private Alpine Runtime에서 실행하는 보안 중심 멀티 Agent 클라이언트입니다. Android가
-Provider API를 직접 호출하거나 API key를 보관하지 않고, 각 공식 CLI가 소유한 Device OAuth와
-관리형 프로토콜을 사용합니다.
+<img src="docs/images/readme-hero-agent-runtime.webp" width="100%" alt="Android 앱 안에서 Codex와 Grok을 실행하는 Alpine Agent CLI Client" />
 
-**English summary** — A security-focused Android multi-agent client that runs the official
-**OpenAI Codex CLI** and **xAI Grok CLI** inside an app-private Alpine Runtime. Android never stores
-provider API keys or calls provider APIs directly; authentication and provider traffic remain owned
-by each official CLI.
+### 공식 AI CLI를 Android 안에서 더 작고, 더 사적으로, 더 검증 가능하게
 
-**Tags** — `Android` · `Kotlin` · `Jetpack Compose` · `AI Agent` · `Multi-Agent` · `Codex` · `Grok` ·
-`OAuth` · `Alpine Linux` · `PRoot` · `Local-First` · `On-Device AI` · `Offline-First` · `Security` ·
-`Unix Domain Socket` · `Open Source`
+**KR** · 공식 **OpenAI Codex CLI**와 **xAI Grok CLI**를 app-private Alpine Runtime에서
+실행하는 보안 중심 Android 멀티 Agent 클라이언트입니다. Android는 Provider API key를 저장하거나
+Provider API를 직접 호출하지 않으며, 인증과 Provider 통신은 각 공식 CLI가 계속 소유합니다.
 
-> **배포 상태 — 서명 입력 대기**
-> 이 작업 환경에는 검증된 production Alpine Python pack이 Git-ignored 로컬 입력으로 준비되어
-> 있고, 이를 포함한 `debug`/`secureDebug` APK 빌드와 Samsung 실기기 최초 설치가 통과했습니다.
-> 공개 배포용 signed release APK를 만들려면 이제 외부 release keystore와 예상 인증서
-> SHA-256만 제공하면 됩니다. 새 checkout에서는 production pack도 다시 제공해야 합니다.
+**EN** · A security-focused Android multi-agent client that runs the official **OpenAI Codex CLI**
+and **xAI Grok CLI** inside an app-private Alpine Runtime. Android stores no provider API keys and
+makes no direct provider API calls; authentication and provider traffic remain owned by each CLI.
 
-## 핵심 특징
+<p>
+  <code>android</code>
+  <code>kotlin</code>
+  <code>jetpack-compose</code>
+  <code>codex</code>
+  <code>grok</code>
+  <code>oauth</code>
+  <code>alpine-linux</code>
+  <code>local-first</code>
+  <code>offline-first</code>
+  <code>security</code>
+</p>
 
-- **CLI 소유 OAuth**: Codex와 Grok의 자격 증명을 Android UI나 Gateway가 직접 읽거나 복사하지 않음
-- **두 공식 Agent**: Codex `app-server`와 Grok ACP의 계정, 동적 모델, 스트리밍 채팅, Stop 지원
-- **완전한 APK 실행 경로**: Runtime 실행 중 Alpine 저장소나 별도 서버에서 Python을 다운로드하지 않음
-- **private UDS**: Android↔Gateway를 app-private Unix domain socket으로 연결하고 양방향 peer UID 확인
-- **요청 인증**: 세션별 HMAC, timestamp, nonce replay 방지와 엄격한 HTTP/SSE 크기·상태 제한
-- **상태 복구**: Agent별 암호화 대화, 모델, Grok 세션 바인딩과 Runtime/Gateway 재시작 복구
-- **fail-closed 배포**: 고정된 CLI/Runtime/Python lock, SBOM, dependency lock, 서명·산출물 검증
-- **백업 차단**: OAuth 및 대화 상태를 `noBackupFilesDir`에 두고 cloud backup과 D2D transfer를 제외
+<p>
+  <a href="app/build.gradle.kts"><img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android 8.0 이상" /></a>
+  <a href="gradle/libs.versions.toml"><img src="https://img.shields.io/badge/Kotlin-2.2.21-7F52FF?style=flat-square&amp;logo=kotlin&amp;logoColor=white" alt="Kotlin 2.2.21" /></a>
+  <a href="app/src/main"><img src="https://img.shields.io/badge/Jetpack-Compose-4285F4?style=flat-square&amp;logo=jetpackcompose&amp;logoColor=white" alt="Jetpack Compose" /></a>
+  <a href="alpine-runtime-pack-bundled/runtime-lock.json"><img src="https://img.shields.io/badge/Alpine-3.21.3-0D597F?style=flat-square&amp;logo=alpinelinux&amp;logoColor=white" alt="Alpine Linux 3.21.3" /></a>
+  <a href="docs/python-pack-preparation-20260816.md"><img src="https://img.shields.io/badge/Python-3.12.14-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.12.14" /></a>
+</p>
+<p>
+  <a href="docs/codex-cli-notice.md"><img src="https://img.shields.io/badge/Codex_CLI-0.147.0-111111?style=flat-square&amp;logo=openai&amp;logoColor=white" alt="Codex CLI 0.147.0" /></a>
+  <a href="docs/grok-cli-notice.md"><img src="https://img.shields.io/badge/Grok_CLI-1.0.0-111111?style=flat-square&amp;logo=x&amp;logoColor=white" alt="Grok CLI 1.0.0" /></a>
+  <a href="docs/security-model.md"><img src="https://img.shields.io/badge/OAuth-CLI_owned-2EA043?style=flat-square&amp;logo=openid&amp;logoColor=white" alt="CLI가 소유하는 OAuth" /></a>
+  <a href="docs/architecture.md"><img src="https://img.shields.io/badge/Transport-private_UDS-0969DA?style=flat-square&amp;logo=socketdotio&amp;logoColor=white" alt="Private Unix domain socket" /></a>
+  <a href="docs/runtime-supply-chain.md"><img src="https://img.shields.io/badge/Runtime-offline_verified-2EA043?style=flat-square&amp;logo=android&amp;logoColor=white" alt="오프라인 Runtime 검증 완료" /></a>
+</p>
+<p>
+  <a href="#-검증-상태"><img src="https://img.shields.io/badge/Python_tests-176_passing-2EA043?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 테스트 176개 통과" /></a>
+  <a href="docs/samsung-app-real-use-qa-20260816.md"><img src="https://img.shields.io/badge/Samsung-Android_16_verified-1428A0?style=flat-square&amp;logo=samsung&amp;logoColor=white" alt="Samsung Android 16 검증" /></a>
+  <a href="#-배포-상태"><img src="https://img.shields.io/badge/Release-signing_pending-D97706?style=flat-square&amp;logo=androidstudio&amp;logoColor=white" alt="Release signing 입력 대기" /></a>
+  <a href="https://github.com/coreline-ai/alpine-codex-cli-client/commits/main"><img src="https://img.shields.io/github/last-commit/coreline-ai/alpine-codex-cli-client?style=flat-square&amp;logo=github&amp;label=last%20commit" alt="GitHub 마지막 커밋" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2EA043?style=flat-square&amp;logo=gnu&amp;logoColor=white" alt="GPL-3.0 라이선스" /></a>
+</p>
 
-## 지원 범위
+[프로젝트 개요](#-프로젝트-개요) · [핵심 기능](#-핵심-기능) · [Agent 지원](#-agent-지원-범위) · [동작 구조](#-동작-구조) · [빌드](#-빌드와-검증) · [배포](#-배포-상태) · [문서](#-문서)
 
-| 항목 | Codex | Grok |
+</div>
+
+> [!IMPORTANT]
+> **API key 재사용 프로젝트가 아닙니다.** Android UI와 Python Gateway는 CLI credential 파일,
+> token 또는 `auth.json`을 읽거나 복사하지 않습니다. Device OAuth, refresh와 Provider 통신은
+> 공식 Codex/Grok CLI가 담당합니다.
+
+> [!NOTE]
+> **2026-08-16 기준:** production Python pack 준비, 별도 Samsung 신규 설치, PRoot/Python Gateway
+> 기동, force-stop 복구, `debug`/`secureDebug` APK 감사가 완료됐습니다. 공개 배포용 signed APK에는
+> 외부 release keystore와 예상 인증서 SHA-256만 남아 있습니다.
+
+## 🔭 프로젝트 개요
+
+Alpine Agent CLI Client는 Termux나 원격 Gateway 없이 Android APK 하나가 Alpine/PRoot, Python
+Gateway와 두 공식 CLI의 실행 환경을 제공하도록 설계되었습니다. 앱은 계정·모델·대화·스트리밍·Stop을
+하나의 Compose UI로 조정하지만 Provider 인증과 통신 규칙을 다시 구현하지 않습니다.
+
+| 항목 | 현재 기준 |
+|---|---|
+| 📱 플랫폼 | Android API `26+`, target/compile API `36`, `arm64-v8a` |
+| 🧩 앱 버전 | version code `2`, version name `0.2.0` |
+| 🤖 Agent | Codex CLI `0.147.0`, Grok CLI `1.0.0` |
+| 🔑 인증 | 공식 CLI Device OAuth; Android/Gateway credential 비접근 |
+| 🏔️ Runtime | Alpine `3.21.3` + PRoot, app-private filesystem |
+| 🐍 Python | `3.12.14-r0`, 21-package production lock/SPDX pack |
+| 🔌 앱 내부 전송 | filesystem UDS + 양방향 peer UID + HMAC/timestamp/nonce |
+| 💾 상태 저장 | versioned `noBackupFilesDir`, Keystore-wrapped secret/대화 envelope |
+| 📦 배포 형태 | Play Store가 아닌 검증된 signed APK 직접 배포 |
+| 📜 라이선스 | 프로젝트 코드 GPL-3.0; 번들 구성요소는 각 upstream license 적용 |
+
+이 프로젝트는 범용 OpenAI/xAI REST SDK, API key 클라이언트, 원격 Agent 서비스 또는 범용 Linux
+터미널이 아닙니다. Gateway는 앱 내부에서 두 CLI를 고정된 typed contract로 연결하는 최소 로컬
+구성요소입니다.
+
+## ✨ 핵심 기능
+
+| 영역 | 구현 내용 |
+|---|---|
+| 🤖 **멀티 Agent** | Codex/Grok 선택, 계정 확인, CLI 기반 동적 모델, Agent별 대화 상태 |
+| 🔐 **CLI-owned OAuth** | Device OAuth 시작·브라우저 handoff·앱 복귀 reconciliation; token 직접 접근 금지 |
+| 💬 **Streaming chat** | normalized SSE, loading/streaming/terminal 상태, 정확히 한 번의 dispatch |
+| ⏹️ **Stop** | 현재 turn만 cancel, duplicate Stop·late terminal·자동 replay 방지 |
+| 🔄 **복구** | background/foreground와 force-stop 뒤 Runtime→Python→Gateway→Agent 순차 복구 |
+| 🧱 **App-private Runtime** | Alpine rootfs, PRoot, workspace, CLI HOME과 Gateway UDS를 앱 sandbox에 유지 |
+| 📦 **APK-contained Python** | lock된 Alpine `.apk`만 staging 후 `apk add --no-network`로 설치 |
+| 🔌 **Private transport** | TCP loopback 제거, Unix domain socket peer UID 상호 확인, HMAC 요청 인증 |
+| 🛡️ **데이터 보호** | backup/D2D 제외, `FLAG_SECURE`, AES-GCM 대화 envelope, 민감 로그 금지 |
+| 🔍 **공급망 검증** | CLI/Runtime/Python hash lock, SPDX SBOM, component inventory, release artifact verifier |
+| 🚫 **Fail closed** | 잘못된 lock/profile/method/asset/signing 입력은 fallback 없이 차단 |
+
+## 🤖 Agent 지원 범위
+
+| 항목 | OpenAI Codex | xAI Grok |
 |---|---|---|
-| 공식 실행 파일 | Codex CLI `0.147.0` | Grok CLI `1.0.0` |
-| 인증 | 공식 CLI Device OAuth | 공식 CLI Device OAuth |
-| 프로토콜 | `codex app-server` JSONL | 고정 ACP JSONL |
-| 모델 | CLI가 반환한 동적 목록 | CLI가 반환한 동적 목록 |
-| 채팅 | 스트리밍 및 Stop | 스트리밍, Stop, 제한된 사전 출력 auth recovery |
-| 도구 범위 | read-only / approval-never 경계 | chat-only profile, 금지 tool event fail-closed |
+| 실행 파일 | 공식 Codex CLI `0.147.0` | 공식 Grok CLI `1.0.0` |
+| 관리 프로토콜 | `codex app-server` JSONL | 고정 ACP JSONL |
+| 인증 | CLI Device OAuth | CLI Device OAuth |
+| 계정 상태 | app-server `account/read` | ACP auth/status projection |
+| 모델 | CLI가 반환한 live 목록 | CLI가 반환한 live 목록 |
+| 대화 | streaming turn, history, Stop | streaming turn, session binding, Stop |
+| 실행 범위 | read-only / approval-never | chat-only profile |
+| 복구 정책 | 사용자 prompt 자동 재전송 없음 | 출력 전 제한 auth recovery만 허용; 출력 뒤 retry 거부 |
+| 금지 범위 | raw executable/argument/method 선택 금지 | tool/subagent/MCP/filesystem/terminal event fail-closed |
 
-이 프로젝트는 범용 OpenAI/xAI REST SDK, API key 클라이언트, 원격 Gateway 서비스 또는
-Termux 프런트엔드가 아닙니다. Gateway는 앱 내부에서 두 CLI를 고정된 typed contract로 연결하는
-로컬 구성요소입니다.
+## 🧭 사용자 흐름
 
-## 동작 구조
+1. 앱을 실행하면 설정된 Runtime 상태를 검사합니다.
+2. 필요한 경우 APK 내부 Alpine과 Python package pack을 준비합니다.
+3. Python Gateway를 private UDS에서 시작하고 선택 Agent 하나만 활성화합니다.
+4. 로그인이 필요하면 CLI가 Device OAuth를 만들고 Android가 공식 브라우저로 전달합니다.
+5. 사용자가 브라우저에서 승인하면 앱 복귀 후 계정과 live model을 다시 확인합니다.
+6. 사용자가 직접 보낸 prompt만 정확히 한 번 실행하고 SSE로 화면에 표시합니다.
+7. Stop은 현재 요청만 취소하며 다른 Agent fallback이나 자동 replay를 수행하지 않습니다.
 
-![Private UDS와 분리된 CLI OAuth를 사용하는 보안 구조](docs/images/readme-private-oauth-architecture.webp)
+## 🏗️ 동작 구조
+
+<img src="docs/images/readme-private-oauth-architecture.webp" width="100%" alt="Private UDS와 분리된 CLI OAuth를 사용하는 Alpine Agent CLI Client 보안 구조" />
 
 ```text
-Android Compose UI
-  -> HMAC HTTP/SSE over app-private UDS
-  -> Python Agent Gateway
-  -> single-flight Agent router
-  -> official Codex app-server | official Grok ACP
-  -> CLI-owned Device OAuth and Provider traffic
+┌──────────────────────── Android application UID ─────────────────────────┐
+│                                                                          │
+│  Compose UI / ViewModels                                                 │
+│        │  HMAC HTTP + SSE                                                │
+│        ▼                                                                 │
+│  app-private Unix domain socket ── peer UID verification                 │
+│        │                                                                 │
+│        ▼                                                                 │
+│  Python Agent Gateway ── single-flight router                            │
+│        ├──────────────► official Codex app-server ──► OpenAI             │
+│        └──────────────► official Grok ACP        ──► xAI                 │
+│                                                                          │
+│  Alpine / PRoot · separate CLI HOME binds · Keystore-wrapped state       │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-한 시점에는 Runtime/Gateway 하나와 선택된 Agent process 하나만 실행됩니다. 로그인이나 turn이
-진행 중이면 Agent 전환을 거부하고, prompt 자동 재전송이나 다른 Agent로의 fallback을 수행하지
-않습니다. 상세한 경계는 [프로젝트 개요](docs/project-overview.md)와
-[아키텍처](docs/architecture.md)를 참고하세요.
+한 시점에는 Runtime/Gateway 하나와 선택된 Agent process 하나만 유지합니다. 로그인 또는 turn이
+진행 중이면 Agent 전환을 거부하고, socket/executable/argument/ACP method는 고정하거나 엄격하게
+검증합니다. 상세 계약은 [Architecture](docs/architecture.md)와
+[Security model](docs/security-model.md)에 있습니다.
 
-## 최신 업데이트 — 2026-08-16
+## 🔐 보안 경계
 
-![외부 다운로드 없이 APK에 포함되는 Alpine Python Runtime](docs/images/readme-offline-apk-runtime.webp)
+| 원칙 | 적용 방식 |
+|---|---|
+| Credential 최소 노출 | Android/Gateway의 CLI credential·token·`auth.json` 읽기/복사 금지 |
+| Private carrier | TCP `8787` 제품 경로 제거, app-private filesystem UDS 사용 |
+| Mutual identity | Android client와 Python server가 socket peer UID를 각각 검증 |
+| Request authenticity | 세션 HMAC, timestamp window, nonce replay cache |
+| Closed protocol | 고정 route/schema/method/executable/profile; raw 사용자 명령 전달 금지 |
+| No implicit egress | OAuth와 사용자가 시작한 Agent traffic 외 analytics/sync/package download 없음 |
+| No replay | process 복구가 prompt를 자동 retry하거나 다른 Agent로 fallback하지 않음 |
+| No backup | credential/session/conversation을 `noBackupFilesDir`에 두고 cloud/D2D 제외 |
+| Content-free audit | URL, code, account, model, prompt, response 대신 고정 enum/counter만 기록 |
 
-- Alpine `3.21.3` / Python `3.12.14-r0` production pack을 공식 Alpine 패키지 21개와
-  SPDX 2.3/lock으로 준비했습니다.
-- `debug`와 non-debuggable `secureDebug` APK 빌드, signature와 clean-room audit를 통과했습니다.
-- Samsung `SM-S931N`, API 36에서 별도 `labdebug` 신규 설치로 APK-contained Python 설치,
-  PRoot/Python Gateway 기동과 force-stop 복구를 검증했습니다.
-- Runtime Python 준비는 `/sbin/apk add --no-network`만 사용하며 TCP `8787` listener는 `0`입니다.
-- Python 단위·통합·보안 회귀 `176` tests와 release compile/lint/assets `356` tasks가 통과했습니다.
-- production pack 준비는 완료됐으며 공개 signed release APK에는 외부 release keystore와 예상
-  certificate SHA-256만 남았습니다.
+> [!WARNING]
+> Codex, Grok, Gateway와 PRoot child는 같은 Android application UID 안에서 실행됩니다. 분리된 HOME,
+> bind와 protocol은 정상 동작 중 상태 오염을 막지만, 손상된 동일-UID native process를 막는 별도
+> 커널 sandbox는 아닙니다. 이 잔여 위험은 공개 보안 문서에 명시되어 있습니다.
 
-## 요구 환경
+## 📦 APK-contained Runtime
 
-- macOS 또는 Linux 개발 환경
+<img src="docs/images/readme-offline-apk-runtime.webp" width="100%" alt="외부 다운로드 없이 APK에 포함되는 Alpine Python Runtime" />
+
+설치된 앱은 Python 준비를 위해 Alpine repository, 별도 서버, `curl` 또는 `wget`을 호출하지
+않습니다. 빌드 시 검토된 package bytes를 APK asset에 넣고, Android에서 hash를 다시 확인한 뒤
+다음 고정 흐름만 실행합니다.
+
+```text
+APK asset
+  -> lock/status/SHA-256 검증
+  -> app-private atomic staging
+  -> apk add --no-network --simulate <local .apk files>
+  -> apk add --no-network <local .apk files>
+  -> python3 --version
+  -> import codex_gateway
+```
+
+| Runtime 구성 | 고정 값 |
+|---|---|
+| Alpine | `3.21.3`, `aarch64` |
+| PRoot | OpenMinis revision `8cf13e9` |
+| Python | `3.12.14-r0` |
+| Python pack | production `true`, 21 packages, `17,675,368` package bytes |
+| pack ID | `alpine-3.21.3-python3-3.12.14-r0` |
+| package arch | `aarch64` 또는 Alpine `noarch`만 허용 |
+| trust | 기존 Alpine keyring; `--allow-untrusted` 사용 금지 |
+
+pack provenance와 실기기 최초 설치 결과는
+[Production Python pack 준비 기록](docs/python-pack-preparation-20260816.md)에 있습니다.
+
+## 🆕 최신 업데이트 — 2026-08-16
+
+- ✅ Alpine `3.21.3` / Python `3.12.14-r0` production pack 21개와 SPDX 2.3/lock 준비
+- ✅ Alpine `install_if`가 요구하는 pyc split package를 fresh-install QA에서 발견해 pack 보강
+- ✅ `aarch64`와 `noarch`만 허용하고 foreign architecture를 거부하도록 pack 검증 강화
+- ✅ `debug`와 non-debuggable `secureDebug` APK build/signature/clean-room audit 통과
+- ✅ Samsung `SM-S931N`, Android 16에서 별도 `labdebug` 신규 설치와 Gateway 기동 통과
+- ✅ force-stop 뒤 shell 약 `2.83s`, backend 약 `2.95s` 복구 및 자동 turn 증가 `0`
+- ✅ Python 단위·통합·보안 회귀 `176` tests 통과
+- ✅ release compile/lint/assets `356` tasks와 app release Python pack gate 통과
+- ⏳ 공개 signed APK용 외부 release keystore와 예상 certificate SHA-256 대기
+
+## 🚀 빌드와 검증
+
+### 요구 환경
+
+- macOS 또는 Linux
 - JDK 17
 - Android SDK 36
 - Python 3
-- Android `arm64-v8a`, API 26 이상 기기
-- 첫 의존성/CLI asset 준비 후 offline Gradle 검증이 가능한 로컬 캐시
-- 실제 Runtime 실행 시 검증된 Alpine `aarch64` Python 패키지 팩
+- Android API 26+, `arm64-v8a` 기기
+- 최초 dependency/CLI asset 준비가 끝난 Gradle cache
+- Runtime 실행과 공개 packaging에는 검증된 production Python package pack
 
 현재 APK ABI는 `arm64-v8a`만 지원합니다.
-
-## 빌드와 검증
 
 ### 1. 저장소 준비
 
 ```bash
 git clone https://github.com/coreline-ai/alpine-codex-cli-client.git
 cd alpine-codex-cli-client
+export JAVA_HOME="/path/to/jdk-17"
+export ANDROID_HOME="/path/to/android-sdk"
 ```
-
-Android SDK 경로는 `ANDROID_HOME` 또는 Git에 포함되지 않는 `local.properties`로 지정합니다.
-JDK는 `JAVA_HOME`으로 JDK 17을 가리켜야 합니다.
 
 ### 2. 공식 CLI asset 준비
 
-Codex/Grok 실행 파일은 Git에 포함되지 않습니다. 완전한 offline 빌드에서는 lock과 일치하는 로컬
+Codex/Grok 실행 파일은 Git에 포함되지 않습니다. 완전한 offline build에서는 lock과 일치하는 로컬
 파일을 지정합니다.
 
 ```bash
@@ -114,124 +247,155 @@ export CODEX_CLI_ARCHIVE_PATH=/absolute/path/to/codex-aarch64-unknown-linux-musl
 export GROK_CLI_BINARY_PATH=/absolute/path/to/grok-1.0.0-linux-aarch64
 ```
 
-명시적 파일과 Gradle user cache가 모두 없으면 build task가 lock에 고정된 **공식 URL에서만**
-CLI를 내려받아 크기, SHA-256과 AArch64 ELF를 검증합니다. 이는 APK 생성 시점의 입력 준비이며,
-설치된 Android Runtime은 CLI나 Python을 다운로드하지 않습니다.
+명시적 파일과 Gradle user cache가 모두 없으면 build task가 lock에 고정된 공식 URL에서만 CLI를
+받아 size, SHA-256과 AArch64 ELF를 검증합니다. 이는 APK 생성 시점의 준비이며 설치된 Android
+Runtime은 CLI 또는 Python을 다운로드하지 않습니다.
 
-### 3. Python 패키지 팩 연결
+### 3. Production Python pack 연결
 
-앱에서 Runtime을 실제 실행하려면 다음 로컬 입력을 준비합니다. 빌드는 이 팩을 다운로드하지
-않습니다.
+```bash
+export ALPINE_PYTHON_PACKAGE_DIR=/absolute/path/to/alpine-python-pack
+```
 
 ```text
-ALPINE_PYTHON_PACKAGE_DIR=/absolute/path/to/alpine-python-pack
-
 alpine-python-pack/
   python-pack.lock.json
   sbom.spdx.json
   packages/*.apk
 ```
 
-정확한 스키마와 검증 규칙은
-[`alpine-python-pack-bundled/PACKAGING.md`](alpine-python-pack-bundled/PACKAGING.md)에 있습니다.
-입력이 없어도 일부 개발·정적 검증 variant는 unavailable marker로 빌드할 수 있지만, Runtime의
-Python 준비는 실패하며 public release 패키징은 항상 차단됩니다.
+현재 작업 환경은 Git-ignored 기본 경로
+`alpine-python-pack-bundled/src/main/python-pack`도 사용할 수 있습니다. 새 checkout에는 pack byte가
+자동으로 따라가지 않으며, 입력이 없으면 release packaging은 fail-closed합니다. 정확한 스키마는
+[PACKAGING.md](alpine-python-pack-bundled/PACKAGING.md)를 참고하세요.
 
-### 4. credential-free 전체 검증
+### 4. Credential-free 전체 gate
 
 ```bash
 sh scripts/verify-secure-debug-milestone.sh
 ```
 
-이 gate는 Python/Kotlin 테스트, Android lint와 variant 빌드, Codex/Grok 프로토콜, private UDS,
-백업 정책, CLI·Runtime·Python·Gradle 공급망, clean-room APK, release 정책, 민감 evidence와 기준
-소스 drift를 검사합니다. 실제 OAuth나 유료 turn은 수행하지 않습니다.
+이 gate는 Python/Kotlin test, Android lint와 variant build, Codex/Grok protocol, private UDS,
+backup 정책, CLI·Runtime·Python·Gradle 공급망, clean-room APK, release 정책, sensitive evidence와
+reference drift를 검사합니다. 실제 OAuth나 유료 turn은 수행하지 않습니다.
 
-### 5. 개발 APK
+### 5. 개발·실기기 APK
 
 ```bash
 ./gradlew :app:assembleDebug --offline --no-daemon --console=plain
 ./gradlew :app:assembleSecureDebug --offline --no-daemon --console=plain
 ```
 
-`debug`는 credential-free 실험용이며 실제 OAuth를 코드 수준에서 차단합니다. 실제 계정 검증은
-non-debuggable `secureDebug`와 [Samsung runbook](docs/samsung-grok-secure-debug-runbook.md)의
-승인 경계를 따라야 합니다.
+`debug`는 실제 OAuth를 코드 수준에서 차단하는 credential-free variant입니다. 실제 계정 검증은
+non-debuggable `secureDebug`와 [Samsung runbook](docs/samsung-grok-secure-debug-runbook.md)의 승인
+경계를 따라야 합니다.
 
-## Build variant
+## 🚦 배포 상태
 
-| Variant | Application ID | 디버거 | 실제 OAuth | 목적 |
-|---|---|---:|---:|---|
-| `debug` | `dev.alpine.codexclient.labdebug` | 허용 | 차단 | credential-free 개발·계측 |
-| `secureDebug` | `dev.alpine.codexclient.debug` | 차단 | 허용 | 실제 단말 보안/E2E 검증 |
-| `release` | `dev.alpine.codexclient` | 차단 | 허용 | 외부 서명 공개 배포 |
+| Variant | Application ID | 디버거 | 실제 OAuth | signing | 목적 |
+|---|---|---:|---:|---|---|
+| `debug` | `dev.alpine.codexclient.labdebug` | 허용 | 차단 | debug | fresh-install·credential-free QA |
+| `secureDebug` | `dev.alpine.codexclient.debug` | 차단 | 허용 | debug | 실제 계정 Samsung E2E |
+| `release` | `dev.alpine.codexclient` | 차단 | 허용 | 외부 입력 필수 | 직접 배포 signed APK |
 
-`release`는 다음 조건을 모두 요구합니다.
+공개 release APK는 다음 입력을 모두 요구합니다.
 
-1. `production: true`로 검증된 APK 내장 Python 패키지 팩
-2. 네 개의 `ALPINE_RELEASE_*` 서명 환경변수
-3. 서명 후 예상 certificate SHA-256을 사용한 최종 APK/AAB 감사
+```text
+ALPINE_RELEASE_STORE_FILE
+ALPINE_RELEASE_STORE_PASSWORD
+ALPINE_RELEASE_KEY_ALIAS
+ALPINE_RELEASE_KEY_PASSWORD
+ALPINE_RELEASE_CERT_SHA256
+```
 
-저장소는 private signing key나 production Python package를 생성·다운로드·커밋하지 않습니다.
-전체 절차는 [공개 배포 가이드](docs/public-release.md)를 참고하세요.
+서명된 APK 생성 후 예상 certificate SHA-256과 함께 `verify-release-artifact.py`를 통과해야 합니다.
+저장소는 private signing key를 생성하거나 commit하지 않습니다. Play Store/AAB 제출은 현재 배포
+범위가 아니며 검증된 APK 파일을 직접 배포합니다.
 
-## 주요 모듈
+```bash
+./gradlew :app:assembleRelease --offline --no-daemon --console=plain
+python3 scripts/verify-release-artifact.py \
+  --artifact app/build/outputs/apk/release/app-release.apk \
+  --expected-certificate-sha256 "$ALPINE_RELEASE_CERT_SHA256"
+```
 
-| 경로 | 역할 |
+전체 경계는 [공개 배포 가이드](docs/public-release.md)에 정의되어 있습니다.
+
+## 🧩 모듈 구성
+
+| 모듈 | 역할 |
 |---|---|
 | `app` | Compose UI, Runtime orchestration, Keystore, UDS transport, 상태 복구 |
-| `codex-runtime-bridge` | Agent-neutral Gateway client, HMAC, JSON/SSE parsing |
-| `codex_gateway` | Python Gateway, Codex/Grok adapter, Agent router, ACP supervisor |
-| `alpine-runtime-*` | Alpine/PRoot 설치·실행·background lifecycle·2-slot rollback |
-| `alpine-workspace-*` | app-private workspace 계약과 Android 구현 |
-| `codex-cli-pack` | 고정 Codex CLI asset 생성·검증 |
-| `grok-cli-pack` | 고정 Grok CLI와 chat-only profile 생성·검증 |
-| `codex-gateway-pack-bundled` | Python Gateway를 APK asset으로 패키징 |
-| `alpine-python-pack-bundled` | 로컬 Alpine Python 패키지 팩 검증·APK 포함 |
-| `scripts`, `tests` | 공급망, 산출물, 보안 회귀 및 Python 테스트 |
+| `codex-runtime-bridge` | Agent-neutral Gateway client, HMAC, strict JSON/SSE parser |
+| `codex_gateway` | Python Gateway, Agent router/service, Codex/Grok adapter, ACP supervisor |
+| `alpine-runtime-api` | Runtime artifact/session/state 공개 계약 |
+| `alpine-runtime-android` | rootfs 설치, PRoot launch, bind 검증, 2-slot rollback |
+| `alpine-runtime-host` | Runtime session과 command/terminal lifecycle |
+| `alpine-runtime-background-android` | Android background Runtime service |
+| `alpine-runtime-ui-compose` | Runtime 상태와 package action Compose UI |
+| `alpine-runtime-pack-bundled` | Alpine rootfs, PRoot/loader, runtime lock와 SPDX |
+| `alpine-python-pack-bundled` | local Python `.apk` pack 검증·asset 생성·atomic staging |
+| `alpine-workspace-api` / `alpine-workspace-android` | app-private workspace 계약과 Android 구현 |
+| `codex-cli-pack` | 고정 Codex CLI asset 생성과 검증 |
+| `grok-cli-pack` | 고정 Grok CLI와 chat-only profile 생성과 검증 |
+| `codex-gateway-pack-bundled` | Python Gateway source manifest와 APK asset |
 
-14개 Gradle module의 상세 소유권은 [프로젝트 개요](docs/project-overview.md#모듈-구성)에
-정리되어 있습니다.
+## 🧪 검증 상태
 
-## 현재 제약과 남은 배포 입력
+| 검증 | 결과 |
+|---|---|
+| Python 단위·통합·보안 회귀 | ✅ PASS — `176 tests` |
+| Production Python source/assets | ✅ PASS — `21 packages` |
+| App release Python pack gate | ✅ PASS |
+| `debug` APK build | ✅ PASS |
+| `secureDebug` build/signature/non-debuggable/clean-room | ✅ PASS |
+| Release compile/lint/assets | ✅ PASS — `356 tasks` |
+| Samsung fresh offline install | ✅ PASS — `SM-S931N`, Android 16 |
+| PRoot / Python Gateway | ✅ PASS — `1 / 1` |
+| force-stop recovery | ✅ PASS — backend 약 `2.95s` |
+| TCP `8787` listener | ✅ PASS — `0` |
+| lifecycle 중 자동 turn | ✅ PASS — 증가 `0` |
+| Signed release artifact | ⏳ BLOCKED — 외부 signing 입력 대기 |
 
-- 현재 작업 환경의 production Python pack은 21개 Alpine 패키지와 SPDX/lock으로 준비되어 있으나
-  Git에 포함되지 않으므로 새 checkout에는 자동으로 따라가지 않음
-- release signing keystore와 인증서 fingerprint는 배포자가 외부 보안 저장소에서 제공해야 함
-- APK 내장 offline Python 팩의 별도 `labdebug` 최초 설치·Gateway 기동·강제 종료 복구는 Samsung
-  실기기에서 통과했으며, 실제 계정을 보존한 `secureDebug` 업데이트와 signed release 최종 smoke는 남아 있음
-- 동일 앱 UID 안의 Codex/Grok HOME 분리는 정상 동작 격리이며 악성 동일-UID 프로세스에 대한
-  커널 보안 경계는 아님
-- Gradle dependency lock은 적용됐지만 verification metadata와 wrapper ZIP checksum은 로컬 입력
-  부재로 아직 생성되지 않음
+날짜가 있는 evidence의 APK SHA-256과 test count는 해당 artifact에만 적용됩니다. 최신 상세 결과는
+[Samsung 앱 실사용 QA](docs/samsung-app-real-use-qa-20260816.md)와
+[Production Python pack 기록](docs/python-pack-preparation-20260816.md)을 참고하세요.
 
-## 문서
+## 📚 문서
 
-- [문서 인덱스](docs/README.md)
-- [프로젝트 개요](docs/project-overview.md)
-- [Architecture](docs/architecture.md)
-- [Security model](docs/security-model.md)
-- [보안 검토 및 조치 현황](security_best_practices_report.md)
-- [앱 실사용 QA 전략과 실행 방법](docs/app-real-use-qa.md)
-- [Samsung 앱 실사용 QA evidence](docs/samsung-app-real-use-qa-20260816.md)
-- [공개 배포 가이드](docs/public-release.md)
-- [Runtime 공급망](docs/runtime-supply-chain.md)
-- [Gradle 공급망](docs/gradle-supply-chain.md)
-- [SBOM과 component inventory](docs/debug-sbom.md)
-- [Production Python pack 준비 기록](docs/python-pack-preparation-20260816.md)
-- [AnyClaw 비교 분석](docs/anyclaw-analysis.md)
-- [Samsung Grok secure-debug runbook](docs/samsung-grok-secure-debug-runbook.md)
-- [기여 가이드](CONTRIBUTING.md)
-- [보안 정책과 취약점 보고](SECURITY.md)
+| 문서 | 내용 |
+|---|---|
+| [문서 인덱스](docs/README.md) | 전체 문서 탐색 시작점 |
+| [프로젝트 개요](docs/project-overview.md) | 제품 목적, 모듈, 상태와 남은 작업 |
+| [Architecture](docs/architecture.md) | Runtime topology, 저장소와 lifecycle invariant |
+| [Security model](docs/security-model.md) | 위협 모델, 신뢰 경계, 통제와 잔여 위험 |
+| [보안 전문가 검토](security_best_practices_report.md) | 발견 사항별 조치와 현재 판정 |
+| [앱 실사용 QA](docs/app-real-use-qa.md) | module 검증과 분리된 full app QA 전략 |
+| [Samsung QA evidence](docs/samsung-app-real-use-qa-20260816.md) | redacted 실기기 lifecycle/pack 결과 |
+| [공개 배포](docs/public-release.md) | production pack, signing, artifact verification |
+| [Runtime 공급망](docs/runtime-supply-chain.md) | Alpine/PRoot/Python lock, SPDX, rollback |
+| [SBOM](docs/debug-sbom.md) | component inventory와 embedded SPDX |
+| [AnyClaw 비교](docs/anyclaw-analysis.md) | Android Codex OAuth 구현과 보안 경계 비교 |
 
-개발 계획은 `dev-plan/`에 보존되어 있으며, 현재 제품 설명의 기준은 README와 `docs/`의 상태
-문서입니다.
+## 🧱 현재 제약
 
-## 라이선스와 제3자 구성요소
+- 현재 production Python pack은 이 작업 환경의 Git-ignored local input이며 새 clone에는 포함되지 않습니다.
+- 외부 release keystore와 예상 certificate fingerprint가 제공되기 전 signed APK는 만들지 않습니다.
+- 동일 Android UID 안의 CLI HOME 분리는 논리적 격리이며 별도 커널 security boundary가 아닙니다.
+- Gradle dependency lock은 적용됐지만 verification metadata와 wrapper ZIP checksum은 아직 미완료입니다.
+- `secureDebug` current-source APK는 build/audit를 통과했지만 기존 실계정 앱 보존을 위해 아직 update-install하지 않았습니다.
+
+## 🤝 기여와 보안 보고
+
+- 변경 전 [CONTRIBUTING.md](CONTRIBUTING.md)의 공급망·민감정보·검증 규칙을 확인하세요.
+- 취약점과 credential 노출 가능성은 공개 issue 대신 [SECURITY.md](SECURITY.md)의 비공개 절차로 보고하세요.
+- OAuth URL/code, account, model, prompt, response, token 또는 broad logcat을 issue·PR·evidence에 포함하지 마세요.
+
+## 📄 라이선스와 제3자 구성요소
 
 프로젝트 자체 코드는 [GNU General Public License v3.0](LICENSE)으로 배포됩니다.
 
-번들 또는 생성되는 Codex CLI, Grok CLI, Alpine 패키지, PRoot 및 Maven 구성요소에는 각자의
+번들 또는 생성되는 Codex CLI, Grok CLI, Alpine packages, PRoot와 Maven 구성요소에는 각 upstream
 라이선스가 적용됩니다. 자세한 내용은 [Codex CLI notice](docs/codex-cli-notice.md),
-[Grok CLI notice](docs/grok-cli-notice.md), [SBOM 문서](docs/debug-sbom.md)와 APK 안의 component
+[Grok CLI notice](docs/grok-cli-notice.md), [SBOM 문서](docs/debug-sbom.md)와 APK 내부 component
 inventory를 확인하세요.
