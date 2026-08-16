@@ -87,6 +87,16 @@ Gateway와 두 공식 CLI의 실행 환경을 제공하도록 설계되었습니
 터미널이 아닙니다. Gateway는 앱 내부에서 두 CLI를 고정된 typed contract로 연결하는 최소 로컬
 구성요소입니다.
 
+## 📱 실행 화면
+
+| Codex Device OAuth | Codex·Grok Agent 선택 | Local Runtime 상태 |
+|:---:|:---:|:---:|
+| <img src="docs/images/app-screen-codex-oauth.png" width="100%" alt="Codex Device OAuth 로그인 화면" /> | <img src="docs/images/app-screen-agent-selector.png" width="100%" alt="Codex와 Grok Agent 선택 화면" /> | <img src="docs/images/app-screen-runtime-status.png" width="100%" alt="Alpine과 Gateway Local Runtime 상태 화면" /> |
+
+> [!NOTE]
+> Samsung `SM-S931N` 실기기에서 촬영한 동일 Compose UI입니다. 제품 APK의
+> `FLAG_SECURE`를 유지하기 위해 실제 계정·credential과 분리된 Lab variant를 사용했습니다.
+
 ## ✨ 핵심 기능
 
 | 영역 | 구현 내용 |
