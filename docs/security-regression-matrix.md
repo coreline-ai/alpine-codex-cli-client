@@ -1,11 +1,25 @@
 # Security regression matrix
 
-Date: `2026-08-15 KST`
+Date: `2026-08-16 KST`
 
-The security hardening baseline is the user's existing dirty `main` working tree rooted at commit
-`ec94f99e45982af8fffc6d1b9e96b7362c2c3d43`. It is intentionally not reset, stashed, or treated as a
-clean Git snapshot. The reproducible product baseline is instead fixed by the tests, immutable
-reference-source commit, artifact locks, and redacted Samsung evidence below.
+The security hardening implementation baseline is committed on `main` at
+`e15b808ed54154fcafa31656010a7309e2621238`. Reproducibility is fixed by this source revision, the
+tests, immutable reference-source commit, artifact locks, and redacted Samsung evidence below.
+Documentation-only follow-up changes do not replace the implementation baseline.
+
+## App-level acceptance boundary
+
+The contracts below are implementation regression prerequisites, not a substitute for a user opening
+and operating the installed app. The separate full matrix, safe launcher/lifecycle harness, candidate
+identity rules, and Samsung baseline are documented in [`app-real-use-qa.md`](app-real-use-qa.md),
+[`samsung-app-real-use-qa-20260816.md`](samsung-app-real-use-qa-20260816.md), and
+[`../dev-plan/implement_20260816_081114.md`](../dev-plan/implement_20260816_081114.md).
+
+Current status: historical installed candidate A passed the non-destructive launch/background/
+force-stop/relaunch smoke and a separately approved Grok normal turn/Stop pair with content-free
+audit. It does not establish current-source candidate B or signed release C as app-level PASS.
+OAuth restart, model/Agent selection, Codex live turn, and all B/C live acceptance remain separate,
+explicitly approved candidate-bound runs.
 
 | ID | Automated contract | Samsung/manual evidence |
 |---|---|---|
@@ -27,12 +41,19 @@ The normalized golden carrier is fixed by `tests/test_agent_gateway.py`,
 the Codex/Grok protocol/profile/artifact verification scripts. Fixtures contain no credential,
 OAuth URL/code, account metadata, prompt, or response from a real session.
 
-## Phase gates
+## Current gates
 
 - Credential-free full gate: `scripts/verify-secure-debug-milestone.sh`
 - Private UDS device gate: `SecureGatewayRuntimeInstrumentedTest`
 - Reference source: immutable commit `b81a7d8ee12af72ff95180bfeadabe68e5be950e`
-- Phase 1 baseline: Python 118 tests and 516 Gradle tasks, all protocol/artifact/APK/evidence/reference gates PASS
-- Phase 3 device result: Samsung `SM-S931N` private UDS/peer UID/HMAC/TCP-negative/socket-cleanup test PASS
-- Phase 5 device result: Samsung data-preserving migration committed; Codex/Grok/handoff no-backup
-  binds active; Grok OAuth/history/composer and `1/1/1/1` app/PRoot/Python/Grok cardinality retained
+- Implementation baseline: Python 160 tests and 884 Gradle tasks, all protocol/artifact/APK/evidence/
+  reference/backup/Runtime/Gradle/release-policy gates PASS
+- Samsung transport result: `SM-S931N` private UDS/peer UID/HMAC/TCP-negative/socket-cleanup test PASS
+- Samsung migration result: data-preserving migration committed; Codex/Grok/handoff no-backup binds
+  active; Grok OAuth/history/composer and `1/1/1/1` app/PRoot/Python/Grok cardinality retained
+- Production Python pack source/assets, `debug`/`secureDebug` packaging and a fresh Samsung offline
+  install are PASS. Signed release packaging remains intentionally blocked until complete external
+  signing inputs are present; this is a policy PASS, not an unresolved test failure
+
+Historical Phase documents retain their original test counts and APK hashes. The consolidated current
+status is [`project-overview.md`](project-overview.md).

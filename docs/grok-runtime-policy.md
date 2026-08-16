@@ -1,6 +1,6 @@
 # Grok Runtime launch policy
 
-Date: `2026-08-12 KST`
+Date: `2026-08-15 KST`
 
 ## Boundary
 
@@ -16,7 +16,7 @@ threads, so every subsequently spawned CLI inherits the private mask without a f
 
 ## Fixed process contract
 
-No Android or loopback request can supply an executable, path, argument, environment entry, or raw
+No Android or Gateway request can supply an executable, path, argument, environment entry, or raw
 ACP method. The fixed command is:
 
 ```text
@@ -33,7 +33,7 @@ Device Flow selection, the official key-auth kill switch, updater/subagent kill 
 telemetry-disable switches. Ambient `PATH`, proxy, logging, plugin, leader, secret, token, and custom
 endpoint values are not inherited.
 
-Production Grok activation can originate in a `ThreadingHTTPServer` request worker. The supervisor
+Production Grok activation can originate in a Gateway request worker. The supervisor
 passes the fixed working directory and `close_fds=True`, selecting CPython's native fork/exec
 implementation while closing unrelated Gateway and PRoot descriptors. No Python callback runs in the
 child. A per-child umask argument is also prohibited; the Gateway's process-wide `077` mask is fixed
@@ -62,7 +62,7 @@ exact authentication sequence.
 
 ## Chat-only profile
 
-`grok-profile/chat-only.md` is packaged only as a debug asset and locked by exact size and SHA-256.
+`grok-profile/chat-only.md` is packaged as a main asset for all variants and locked by exact size and SHA-256.
 It disables skill and AGENTS discovery, inherited skills, MCP servers, background work, and uses plan
 permission mode. For pinned Grok CLI 1.0.0, the profile uses `task` as a deliberate allowlist sentinel
 and also denies it explicitly:
@@ -80,17 +80,15 @@ profile hash, negative tests, and Samsung smoke are reviewed again.
 
 The raw official ACP `initialize` response advertises generic file/MCP/session capabilities before
 the per-session profile is built. Those broad declarations are not treated as effective Android
-capabilities and will not be forwarded as-is. Phase 4 owns a method allowlist and reverse-request
-denial; session creation always supplies an empty MCP server list and disabled client filesystem and
-terminal capabilities.
+capabilities and will not be forwarded as-is. The ACP supervisor owns a fixed method allowlist and
+reverse-request denial; session creation always supplies an empty MCP server list and disabled client
+filesystem and terminal capabilities.
 
-A credential-free `session/new` probe was attempted after successful initialize and was rejected by
-the official CLI before a session was created. Starting OAuth merely to test the profile would violate
-the Phase 3 credential-free gate and G2. The authenticated real-session negative check is therefore
-an explicit Phase 9 gate after the secure OAuth prerequisites: fixed-profile session creation must
-succeed while tool, subagent, MCP, filesystem, and terminal event counts remain zero.
+A credential-free `session/new` probe was rejected by the official CLI before a session was created.
+The later approved authenticated Samsung turn verified that fixed-profile session creation succeeds
+while tool, subagent, MCP, filesystem, and terminal event counts remain zero.
 
-Phase 9 readiness now enforces this as code, not an operator-only observation. The ACP multiplexer
+Current readiness enforces this as code, not an operator-only observation. The ACP multiplexer
 classifies the pinned tool/subagent/MCP/filesystem/terminal wire families per generation and fails the
 generation on first observation. The first `session/prompt` checks the five counters while holding the
 same lock used for the JSONL write. The terminal SSE carries only redacted counters, and Android emits
@@ -98,18 +96,16 @@ one fixed `AgentTurnAudit` line for post-turn evidence.
 
 ## Verification result
 
-On the redacted Samsung target, the debug-signed app was update-installed without clearing data.
-The pinned version command and credential-free ACP initialize succeeded. The initialize result exposed
-only the interactive `grok.com` auth method under the official key-auth kill switch. Runtime stop left
-zero Grok, PRoot, or app process matches. App-private mode checks returned `0700` for all inspected
-directories/executable and `0600` for the profile.
-
-No authenticate request, browser action, Device Code, account access, model inference, prompt, logout,
-credential mutation, app uninstall, or app-data clear occurred in this phase.
+On the redacted Samsung target, the non-debuggable, debug-signed app was update-installed without
+clearing data. The pinned version/ACP initialize, official `grok.com` Device OAuth, live model,
+streaming turn, Stop, force-stop recovery and forbidden-profile zero counters passed. Credential files,
+account fields, OAuth URL/code, raw prompt/response and broad logs were not read or retained. Current
+source also routes Android traffic through private UDS with bidirectional peer UID and HMAC checks;
+the latest full source baseline is recorded in [`project-overview.md`](project-overview.md).
 
 ## ACP supervisor boundary
 
-The Phase 4 supervisor owns one process generation and implements the lifecycle
+The supervisor owns one process generation and implements the lifecycle
 `STOPPED → STARTING → INITIALIZING → READY → STOPPING/FAILED`. JSONL decoding is strict UTF-8,
 object-only, and limited to 1 MiB per line. Request IDs are monotonic, pending requests are bounded,
 writes are serialized, timeouts are fixed by method, and unknown, duplicate, late, or reverse

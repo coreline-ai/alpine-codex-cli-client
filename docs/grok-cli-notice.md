@@ -34,4 +34,5 @@ Their reviewed SHA-256 values are respectively
 `7b7c315403c596f9b7a13bb562553ee4fd4c05da8672f95bcaa02a125eea2947`.
 
 OAuth, account state, model discovery, and process launch are not responsibilities of this artifact
-pack. Those boundaries are implemented and tested in later phases.
+pack. They are implemented by the typed Grok adapter and fixed ACP supervisor without reading or
+copying CLI-owned credential files.

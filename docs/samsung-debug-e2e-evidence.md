@@ -2,6 +2,10 @@
 
 Date: 2026-08-15
 
+> 이 문서는 시점별 Samsung artifact evidence다. 표의 package version, APK 상태와 116/516 수치는
+> 당시 build에만 적용된다. 현재 source 기준선과 private UDS/offline Python/release 상태는
+> [`project-overview.md`](project-overview.md)를 참고한다.
+
 ## Scope and privacy boundary
 
 - Device: Samsung `SM-S931N` (`arm64-v8a`; serial redacted).

@@ -1,6 +1,6 @@
 # Runtime supply-chain status
 
-Date: `2026-08-15 KST`
+Date: `2026-08-16 KST`
 
 ## Security boundary
 
@@ -18,21 +18,23 @@ explicitly excluded from the public-distribution gate.
 
 | Rootfs | ABI | PRoot | Python | Codex/Grok status | Distribution policy |
 |---|---|---|---|---|---|
-| Alpine `3.21.3` | `aarch64` / Android `arm64-v8a` | OpenMinis `8cf13e9` | APK-local locked package pack | Existing online-bootstrap Samsung evidence only; offline pack device E2E pending | Exact rootfs + production Python pack required; patched replacement is not required |
+| Alpine `3.21.3` | `aarch64` / Android `arm64-v8a` | OpenMinis `8cf13e9` | APK-local locked 21-package pack | Fresh offline `labdebug` install/Gateway/force-stop PASS; signed release pending | Exact rootfs + production Python pack required; patched replacement is not required |
 
 The local environment contains the locked Alpine `3.21.3` asset used by the application. The verifier
 describes and protects that artifact without turning optional replacement work into a release gate.
 
-The current local environment does **not** contain the production Python package bytes. The build
-therefore generates an explicit `available: false` status for development inspection and blocks every
-public release packaging route. This is not replaced with a network fallback.
+The current local environment contains a production-marked 21-package Python pack in the Git-ignored
+default input directory. Gradle generates `available: true`, embeds the pack and blocks on any hash,
+metadata, SBOM or coverage drift. A fresh checkout without that local input still generates explicit
+`available: false` and fails public packaging rather than using a network fallback.
 
 ## APK-contained Python package pack
 
 `alpine-python-pack-bundled` accepts only `ALPINE_PYTHON_PACKAGE_DIR` or its local default directory.
 `scripts/python_package_pack.py` verifies exact root entries, lock schema, production marker, package
-count, sizes, SHA-256 hashes, signed Alpine APK member structure, `.PKGINFO` name/version/`aarch64`
-identity and SPDX 2.3 SBOM. It then copies the verified bytes into `assets/alpine-python-pack`.
+count, sizes, SHA-256 hashes, signed Alpine APK member structure, `.PKGINFO` name/version and
+`aarch64`/`noarch` identity, and SPDX 2.3 SBOM. It then copies the verified bytes into
+`assets/alpine-python-pack`.
 
 On Android, `BundledPythonPackageProvider` rechecks status, lock and every package hash while atomically
 staging into `/workspace/.alpine-codex/staging/python-pack/<pack-id>`. The only install sequence is:

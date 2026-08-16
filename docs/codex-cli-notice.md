@@ -15,8 +15,10 @@ repository.
 The project validates archive and executable size, SHA-256, and AArch64 ELF header before
 embedding the generated asset. At first runtime use, it copies the asset atomically to the
 app-private Alpine workspace, checks its hash again, sets executable permission, and runs only
-the fixed `codex --version` smoke command. OAuth remains owned by the official CLI in later
-phases; this artifact pack neither accepts nor stores API keys, OAuth client IDs, or credentials.
+the fixed `codex --version` smoke command. OAuth, account/model discovery and app-server turns remain
+owned by the official CLI; this artifact pack neither accepts nor stores API keys, OAuth client IDs,
+or credentials. Android accesses those operations only through the authenticated typed Gateway
+contract.
 
 Codex CLI source and license notices are published by OpenAI in the
 [official Codex repository](https://github.com/openai/codex).

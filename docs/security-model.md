@@ -16,7 +16,7 @@ Date: `2026-08-15 KST`
 |---|---|
 | Android to Gateway | app-private filesystem UDS, bidirectional peer UID verification, strict Host/Origin/body shape, per-request HMAC, timestamp and nonce replay window |
 | Gateway to CLI | fixed executable/arguments/environment, closed typed method enum, bounded JSONL and timeouts |
-| Codex vs Grok | separate HOME, credential, config, session, and Agent-tagged conversation state |
+| Codex vs Grok | separate HOME, config, session and Agent-tagged conversation state; logical same-UID separation, not a kernel sandbox |
 | OAuth to Android | official complete Device URL only, fixed HTTPS host allowlist, memory-only browser handoff; Grok exact hosts are `auth.x.ai` and `accounts.x.ai` |
 | Conversation at rest | Android Keystore-backed AES-GCM with application-bound AAD and versioned migration |
 | Backup/D2D | `allowBackup=false`, Android 12+ cloud/device-transfer 전면 exclusion, legacy full-backup 전면 exclusion, 민감 상태는 versioned `noBackupFilesDir` direct child |
@@ -99,8 +99,8 @@ so an event racing with session creation cannot pass between the check and promp
 The only production turn audit is the fixed `AgentTurnAudit` line. It contains Agent/outcome enums and
 bounded counts. It never contains request/session/conversation/model identifiers, account metadata,
 OAuth data, prompt/response text, private retry reason, or stderr. Grok stderr retains only observed
-byte count and truncation state. Phase 9 must inspect the dedicated audit tag, not dump a post-chat UI
-hierarchy or broad logcat buffer.
+byte count and truncation state. Real-device verification must inspect only the dedicated audit tag,
+not dump a post-chat UI hierarchy or broad logcat buffer.
 The host verifier consumes exactly one audit line through stdin, accepts no file output, and rejects
 unknown suffixes, multiple lines, out-of-range counts, profile activity, and retry classes outside G1.
 
@@ -116,6 +116,10 @@ unknown suffixes, multiple lines, out-of-range counts, profile activity, and ret
 
 ## Residual risks
 
+- Codex, Grok, Gateway and PRoot children execute under the same Android application UID. Separate
+  HOME/bind/protocol contracts prevent accidental state mixing but do not stop a compromised
+  same-UID native process from probing sibling app-private files. A separate UID broker is not a
+  current release requirement and this trust assumption remains explicit.
 - The locked Alpine `3.21.3` rootfs and its local vulnerability snapshot remain visible in the SBOM
   and inventory. By explicit product decision, patched rootfs, Python preinstalled inside that rootfs,
   and a complete vulnerability database are excluded Phase 6 work. A separately locked, APK-contained
@@ -126,6 +130,9 @@ unknown suffixes, multiple lines, out-of-range counts, profile activity, and ret
 - The external browser may retain a short-lived Device URL in browser history; the app cannot erase it.
 - Production signing credentials and the expected certificate digest must be supplied externally;
   the project never generates or commits the private key.
+- The repository does not contain production Python package bytes. This workstation has a reviewed
+  Git-ignored pack whose fresh offline Samsung install passed; a new checkout still fails closed
+  until the same class of local input is supplied. Signed-release Samsung acceptance remains pending.
 - `FLAG_SECURE` does not control an already-compromised OS or privileged device instrumentation.
 - Google/Samsung/other external backup, restore, and D2D services are outside the permitted security
   test boundary and must not be invoked. Static manifest/APK gates, instrumented migration checks,

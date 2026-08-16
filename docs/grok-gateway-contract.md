@@ -1,6 +1,7 @@
 # Grok normalized Gateway contract
 
 작성일: `2026-08-12 KST`
+최종 상태 갱신: `2026-08-15 KST`
 
 ## Boundary
 
@@ -12,7 +13,7 @@ identifier, or calls an xAI HTTPS inference endpoint. The only authentication me
 The production path remains:
 
 ```text
-Android -> authenticated loopback HTTP/SSE -> Agent Gateway
+Android -> authenticated HTTP/SSE over app-private filesystem UDS -> Agent Gateway
         -> typed Grok adapter -> bounded JSONL -> official Grok CLI ACP
 ```
 
@@ -23,10 +24,11 @@ standard ACP methods such as `initialize`, `authenticate`, and `session/*` remai
 same rule applies to Grok extension notifications. Android and HTTP values still cannot select a
 raw method.
 
-The normalized HTTP handler cannot be constructed without an injected request authorizer. Phase 8
-connected the production session-capability/HMAC verifier to every Codex and Grok route; the Phase 5
-fake lifecycle retains an explicit test authorizer. There is no unsigned default or compatibility
-bypass.
+The normalized HTTP handler cannot be constructed without an injected request authorizer. The
+production session-capability/HMAC verifier protects every Codex and Grok route; both Android and
+Python verify the UDS peer UID before accepting application traffic. Test fixtures retain an explicit
+authorizer and a test-only loopback carrier, but no TCP loopback implementation or unsigned
+compatibility bypass is packaged in the APK.
 
 ## Normalized operations
 

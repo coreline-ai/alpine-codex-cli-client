@@ -2,6 +2,14 @@
 
 작성일: `2026-08-12 KST`
 
+> **현재 상태 보충 (`2026-08-15`, `e15b808`)**
+> 이 문서의 상세 비교는 아래에 고정한 당시 revision의 역사적 감사 결과다. 이후 현재 프로젝트는
+> private UDS/peer UID/HMAC, non-debuggable secure/release variant, Grok 공식 OAuth·model·turn·Stop,
+> no-backup migration, Runtime/Gradle 공급망과 APK 내장 offline Python 경로를 구현했다. 따라서
+> “계획 중”으로 적힌 항목은 현재 상태가 아니다. 최신 비교 기준은
+> [`project-overview.md`](project-overview.md)와
+> [`../security_best_practices_report.md`](../security_best_practices_report.md)를 우선한다.
+
 ## 1. 결론
 
 AnyClaw는 **실제 Android APK 안에서 OpenAI Codex CLI를 실행하고 ChatGPT OAuth로 로그인한 뒤,
@@ -130,7 +138,7 @@ AnyClaw가 Codex OAuth를 **API처럼 사용한다**는 표현은 기능적으�
 > AnyClaw는 공식 Codex CLI로 ChatGPT OAuth credential을 획득하고, 그 credential을 OpenClaw의
 > 로컬 provider/Gateway에 재사용해 Codex를 프로그램 방식의 에이전트 backend처럼 이용한다.
 
-## 6. AnyClaw가 현재 더 나은 프로젝트인 영역
+## 6. AnyClaw가 감사 당시 더 나은 프로젝트인 영역
 
 현재 사용 가능한 **제품**을 기준으로 평가하면 AnyClaw가 우위다.
 
@@ -196,7 +204,7 @@ Termux userland, Node.js, Python, OpenClaw, Codex CLI, OpenClaude, 웹 frontend�
 README는 full auto-approval 및 `danger-full-access` 사용을 기능으로 제시한다. 즉시 사용성과 agent
 자동화에는 유리하지만, 최소 권한 Codex 클라이언트를 목표로 할 때는 다른 threat model이다.
 
-## 8. 현재 프로젝트의 실제 차별점과 한계
+## 8. 감사 당시 현재 프로젝트의 실제 차별점과 한계
 
 ### 8.1 현재 구현에서 확인되는 차별점
 
@@ -214,7 +222,7 @@ refresh를 소유한다고 명시한다.
 
 - <https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/app-server/README.md#authentication-modes>
 
-### 8.2 현재 한계
+### 8.2 감사 당시 한계
 
 현재 프로젝트가 목표 보안을 모두 구현했다고 평가해서는 안 된다.
 
@@ -229,7 +237,7 @@ refresh를 소유한다고 명시한다.
 현재 구현 기준으로 확정 가능한 가장 큰 우위는 OAuth credential 비노출 경계와 공식 app-server
 계약 사용이다.
 
-## 9. 의사결정 매트릭스
+## 9. 감사 당시 의사결정 매트릭스
 
 | 우선 목표 | 더 적합한 선택 | 이유 |
 |---|---|---|
@@ -315,3 +323,15 @@ AnyClaw는 1단계와 제품 중심 2단계를 통과한다. 3단계에서 crede
   비노출을 핵심으로 한 Codex 전용 최소 구조다.
 - 다음 개발 투자 결정은 AnyClaw fork hardening과 현재 프로젝트 완성을 동일 기준으로 비교한 후
   내려야 한다.
+
+### 2026-08-15 재평가
+
+- AnyClaw는 여전히 더 넓은 assistant/skills/multi-agent 제품 범위와 즉시 사용 경험이 강점이다.
+- 현재 프로젝트는 Codex에 더해 Grok도 공식 CLI-owned OAuth로 지원하므로 더 이상 Codex 전용 PoC가
+  아니다.
+- 현재 프로젝트의 private UDS, 양방향 peer UID, HMAC, backup 차단, signed release artifact gate는
+  최초 비교 당시 계획에서 실제 구현으로 전환됐다.
+- production Python pack은 Git-ignored 로컬 입력으로 준비되어 fresh Samsung offline 설치까지
+  통과했지만 release signing input은 저장소 밖에서 아직 제공되지 않아 signed 공개 artifact는
+  fail-closed 상태다. 그러므로 기능 폭은 AnyClaw, 좁고 검증 가능한 credential/transport/release
+  경계는 현재 프로젝트가 각각 우선하는 trade-off로 판단한다.

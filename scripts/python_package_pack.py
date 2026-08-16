@@ -278,7 +278,7 @@ def validate_pack(root: Path, *, require_production: bool = False) -> PythonPack
         if (
             metadata["pkgname"] != item.name
             or metadata["pkgver"] != item.version
-            or metadata["arch"] != lock.architecture
+            or metadata["arch"] not in {lock.architecture, "noarch"}
         ):
             raise PythonPackagePackError(f"Alpine package identity mismatch: {item.file}")
 

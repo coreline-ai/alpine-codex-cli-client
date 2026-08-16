@@ -2,6 +2,10 @@
 
 Date: `2026-08-12 KST`
 
+> 이 문서는 실제 OAuth 전 Phase 8 artifact의 역사적 evidence다. 이후 Grok 실제 OAuth/turn/Stop,
+> private UDS, no-backup migration과 release 공급망이 구현됐다. 현재 기준은
+> [`project-overview.md`](project-overview.md)를 참고한다.
+
 ## Privacy and mutation boundary
 
 - Device alias: `SAMSUNG_TARGET`; Samsung `SM-S931N`, `arm64-v8a`.

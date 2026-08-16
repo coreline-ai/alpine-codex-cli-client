@@ -2,10 +2,10 @@
 
 Date: `2026-08-15 KST`
 
-This runbook is the only approved real-account path for Phase 9. It never uninstalls the target app,
-clears app data, copies credential files, or reads OAuth/account payloads.
+This runbook is the approved real-account path for Grok verification. It never uninstalls the target
+app, clears app data, copies credential files, or reads OAuth/account payloads.
 
-## Verified baseline
+## Verified historical artifact baseline
 
 - Sections 1-6 completed on the approved Samsung target on `2026-08-15 KST`.
 - Final candidate: `161150250` bytes; SHA-256
@@ -13,6 +13,12 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 - Credential-free milestone: 116 Python tests and 516 Gradle tasks plus protocol, clean-room,
   artifact, profile, ACP, APK, evidence, source-map, and Runtime-manifest gates passed.
 - Section 7 remains unexecuted because logout and Runtime shutdown require separate approval.
+
+Current source baseline `e15b808` replaces the product carrier with private UDS and adds no-backup
+migration, supply-chain gates and APK-contained Python preparation. Its credential-free gate passed
+160 Python tests and 884 Gradle tasks. Before another real-account run, provide a verified local
+Python package pack, rebuild `secureDebug`, pass the current milestone, and record the new APK hash;
+do not reuse the historical hash below as current artifact identity.
 
 ## 1. Credential-free gate
 
@@ -67,7 +73,8 @@ clears app data, copies credential files, or reads OAuth/account payloads.
 1. Enter one separate non-sensitive request expected to stream long enough for Stop.
 2. Press Send once, wait for the content-free request-bound `AgentTurnStateAudit` `started`
    checkpoint, then press Stop once.
-3. Require exactly one `stop_requested dispatched=1` state checkpoint. A missing or duplicate
+3. Pipe exactly the new `started` and `stop_requested dispatched=1` message pair to
+   `python3 scripts/verify-agent-turn-state-audit.py`. A missing, reordered, extra, or duplicate
    checkpoint is a failure; do not retry the prompt.
 4. Pipe exactly the new dedicated terminal audit line to
    `python3 scripts/verify-agent-turn-audit.py --mode stop`. Success requires one terminal state,
@@ -96,5 +103,6 @@ clears app data, copies credential files, or reads OAuth/account payloads.
    `docs/samsung-grok-secure-debug-e2e.md`, rerun the evidence scanner, and never commit captures or
    logs.
 
-현재 실행 기준선과 Git 상태는 `docs/grok-phase9-handoff.md`를 따른다. 완료 근거는
-`docs/samsung-grok-secure-debug-e2e.md`에 redacted count와 enum으로만 기록한다.
+현재 source/배포 기준선은 [`project-overview.md`](project-overview.md)를 따른다. Phase 9 handoff와
+Samsung E2E 문서는 당시 artifact evidence로 유지하며, 새 실행 결과는 APK identity와 함께
+`docs/samsung-grok-secure-debug-e2e.md`에 redacted count와 enum으로만 추가한다.

@@ -32,14 +32,16 @@ transfer, sync, analytics, telemetry, or cloud-storage services.
 
 | Layer | Primary locations | Responsibility |
 |---|---|---|
-| Compose app | `app/src/main` | Runtime actions, Agent/model selection, OAuth browser handoff, chat and Stop UI |
+| Compose app | `app/src/main` | Runtime actions, Agent/model selection, OAuth browser handoff, chat, Stop, Keystore state and configured recovery |
 | Android bridge | `codex-runtime-bridge/src/main`, `app/src/main/.../UnixDomainSocketGatewayTransport.kt` | signed UDS HTTP client, peer UID check, strict JSON/SSE state machine, one-shot Stop control |
-| Agent Gateway | `codex_gateway/agents` | Agent-neutral contract, single-flight router/service, normalized HTTP/SSE |
+| Agent Gateway | `codex_gateway`, `codex-gateway-pack-bundled` | authenticated private-UDS entrypoint, Agent-neutral contract, single-flight router/service, normalized HTTP/SSE asset |
 | Codex adapter | `codex_gateway/agents/codex.py` | existing app-server account/model/turn mapping |
 | Grok adapter | `codex_gateway/agents/grok.py` | Device OAuth, dynamic model/session binding, stream/retry/Stop mapping |
 | Grok ACP | `codex_gateway/grok_acp` | pinned launch policy, strict JSONL, method allowlist, profile-event audit |
-| Binary packs | `codex-cli-pack`, `grok-cli-pack` | debug-generated locked official binaries; binaries are not tracked by Git |
-| Runtime packs | `alpine-runtime-*` | app-private Alpine installation, bounded lifecycle, deterministic APK-package SPDX and locked artifact integrity |
+| Binary packs | `codex-cli-pack`, `grok-cli-pack` | variant 공통 generated asset으로 고정된 공식 binary/profile 제공; binary는 Git에 추적하지 않음 |
+| Runtime | `alpine-runtime-*` | app-private Alpine 설치·실행, background lifecycle, deterministic APK-package SPDX, 2-slot rollback |
+| Python pack | `alpine-python-pack-bundled` | 외부 로컬 Alpine package lock/SBOM 검증, variant asset, app-private atomic staging |
+| Workspace | `alpine-workspace-*` | Runtime workspace 경로와 app-private 파일 작업 계약 |
 
 ## Storage topology
 
@@ -105,3 +107,13 @@ terminal SSE event. The Android parser accepts only fixed integer fields and a s
 `AgentTurnAudit` emits one content-free log line with dispatch, delta, terminal, cancel, retry, and
 forbidden-profile counts. Request IDs, conversation IDs, model IDs, URLs, account fields, prompts,
 and responses are absent.
+
+## Distribution boundary
+
+`debug`, `secureDebug`, `release`는 같은 main Runtime/CLI/Gateway/profile asset source를 사용한다.
+차이는 debuggable/OAuth/application ID/signing 정책이다. 저장소에는 production Python package
+bytes와 release private key를 commit하지 않는다. 현재 작업 환경에는 Git-ignored production pack이
+준비되어 있지만 release private key가 없으므로 signed release packaging은 fail-closed한다. 실제
+입력과 최종 signed artifact 검증 절차는 [`public-release.md`](public-release.md)에 정의한다.
+
+전체 모듈과 제품 상태는 [`project-overview.md`](project-overview.md)를 기준으로 한다.

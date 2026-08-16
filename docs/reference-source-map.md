@@ -1,16 +1,17 @@
 # Reference source map
 
 작성일: `2026-08-11 KST`
+최종 상태 갱신: `2026-08-15 KST`
 
 ## Source baseline
 
 | 항목 | 값 |
 |---|---|
-| 참조 저장소 | `/Volumes/ExternalSSD/projects_8/alpine-llm-gateway` |
+| 참조 저장소 | `ALPINE_REFERENCE_REPO`; 기본값 `../../project_202607/alpine-llm-gateway` |
 | Git branch | `main` |
 | Git HEAD | `b81a7d8ee12af72ff95180bfeadabe68e5be950e` |
-| 작업 트리 | dirty; 아래 수정 파일은 Phase 1 이식 전에 별도 review 필요 |
-| 신규 저장소 | `/Volumes/ExternalSSD/projects_8/alpine-codex-cli-client` |
+| 작업 트리 | 신뢰하지 않음; 항상 위 immutable commit blob을 검증 |
+| 대상 저장소 | `coreline-ai/alpine-codex-cli-client` |
 
 검증 스크립트는 live working tree를 신뢰하지 않고 위 Git HEAD의 immutable blob을 읽는다.
 현재 checkout 위치는 `ALPINE_REFERENCE_REPO`로 덮어쓸 수 있으며, 기본값은 프로젝트 루트
@@ -34,16 +35,16 @@ credential 및 Provider direct adapter는 이식 금지다.
 
 | Reference path | Destination path | SHA-256 | Working tree | 이식 상태 |
 |---|---|---|---|---|
-| `alpine-runtime-api/build.gradle.kts` | `alpine-runtime-api/build.gradle.kts` | `343d62bd030e12de181b73df68cd212f262d3a7577c36610ace9b9430334e859` | clean | pending |
-| `alpine-runtime-android/build.gradle.kts` | `alpine-runtime-android/build.gradle.kts` | `0bddaad15acdedb962d64d0bae405048c22e2b1d4ae28878030e35188beafcc5` | clean | pending |
-| `alpine-runtime-host/build.gradle.kts` | `alpine-runtime-host/build.gradle.kts` | `baf059a45e19a8ab018358f1c6f09a5e7d0e9cf2acf4996a24ee396f9c375206` | clean | pending |
-| `alpine-runtime-background-android/build.gradle.kts` | `alpine-runtime-background-android/build.gradle.kts` | `02b52485530d243cb05271fe19f9cdf94a151039cd70f09d60d11dcce965bf5e` | clean | pending |
-| `alpine-runtime-ui-compose/build.gradle.kts` | `alpine-runtime-ui-compose/build.gradle.kts` | `2d9571d0cdf5156d5799e6a29aa3ad4b606d386a48929912c8f9bddf468b3f6f` | clean | pending |
-| `alpine-runtime-pack-bundled/build.gradle.kts` | `alpine-runtime-pack-bundled/build.gradle.kts` | `3f108be0501f1dd6bd45c1c33ded206d4d181ceeec28cadf9d00de24a268a981` | clean | pending |
-| `alpine-workspace-api/build.gradle.kts` | `alpine-workspace-api/build.gradle.kts` | `08ff0bfada62181e8cd0edaf84880898bb76a8262badea5c03a32fba52a91064` | clean | pending |
-| `alpine-workspace-android/build.gradle.kts` | `alpine-workspace-android/build.gradle.kts` | `f936cb61cb87d6206d57e11b38c38b8920914b41f6559d41e1e45ccc5fa13034` | clean | pending |
-| `alpine-chat-routing/build.gradle.kts` | `alpine-chat-routing/build.gradle.kts` | `a9f8a977a272d0a978b16436b456e1cd08df4770200d4522c59ca98b6cdb4438` | clean | pending |
-| `alpine-chat-feature/build.gradle.kts` | `alpine-chat-feature/build.gradle.kts` | `a0b7e92268fc45defd7a2818509503ff6d4d2eb82bd5b77918f8e989d412a17d` | clean | pending |
+| `alpine-runtime-api/build.gradle.kts` | `alpine-runtime-api/build.gradle.kts` | `343d62bd030e12de181b73df68cd212f262d3a7577c36610ace9b9430334e859` | clean | imported; manifest-verified |
+| `alpine-runtime-android/build.gradle.kts` | `alpine-runtime-android/build.gradle.kts` | `0bddaad15acdedb962d64d0bae405048c22e2b1d4ae28878030e35188beafcc5` | clean | imported; reviewed adaptations |
+| `alpine-runtime-host/build.gradle.kts` | `alpine-runtime-host/build.gradle.kts` | `baf059a45e19a8ab018358f1c6f09a5e7d0e9cf2acf4996a24ee396f9c375206` | clean | imported; reviewed adaptations |
+| `alpine-runtime-background-android/build.gradle.kts` | `alpine-runtime-background-android/build.gradle.kts` | `02b52485530d243cb05271fe19f9cdf94a151039cd70f09d60d11dcce965bf5e` | clean | imported; manifest-verified |
+| `alpine-runtime-ui-compose/build.gradle.kts` | `alpine-runtime-ui-compose/build.gradle.kts` | `2d9571d0cdf5156d5799e6a29aa3ad4b606d386a48929912c8f9bddf468b3f6f` | clean | imported; manifest-verified |
+| `alpine-runtime-pack-bundled/build.gradle.kts` | `alpine-runtime-pack-bundled/build.gradle.kts` | `3f108be0501f1dd6bd45c1c33ded206d4d181ceeec28cadf9d00de24a268a981` | clean | imported; reviewed adaptations |
+| `alpine-workspace-api/build.gradle.kts` | `alpine-workspace-api/build.gradle.kts` | `08ff0bfada62181e8cd0edaf84880898bb76a8262badea5c03a32fba52a91064` | clean | imported; manifest-verified |
+| `alpine-workspace-android/build.gradle.kts` | `alpine-workspace-android/build.gradle.kts` | `f936cb61cb87d6206d57e11b38c38b8920914b41f6559d41e1e45ccc5fa13034` | clean | imported; manifest-verified |
+| `alpine-chat-routing/build.gradle.kts` | — | `a9f8a977a272d0a978b16436b456e1cd08df4770200d4522c59ca98b6cdb4438` | clean | not imported |
+| `alpine-chat-feature/build.gradle.kts` | — | `a0b7e92268fc45defd7a2818509503ff6d4d2eb82bd5b77918f8e989d412a17d` | clean | not imported |
 
 Phase 1에서는 실제로 복사하는 모든 source/resource/binary 파일을 이 표 아래에 추가한다.
 directory 단위 복사는 금지하고, 각 항목의 source SHA-256과 destination SHA-256이 같은지
@@ -75,7 +76,7 @@ No Grok source file or binary is copied or tracked in this Phase 0 entry. It rec
 | Item | Official source | Locked identity | Project state |
 |---|---|---|---|
 | Grok source snapshot | `https://github.com/xai-org/grok-build` | repository HEAD `be713136d2a69080743a3f6b3c72077057e5948f`; embedded source revision `5d08d7e4123092567ccd584cd9f99afa2972065c`; `LICENSE` SHA-256 `116f7778b9802e569b7fa3a532b17bd80eb13c67837def01eed093d4ea472f28`; `THIRD-PARTY-NOTICES` SHA-256 `7b7c315403c596f9b7a13bb562553ee4fd4c05da8672f95bcaa02a125eea2947` | reviewed; no source copied; notice links pinned to commit |
-| Grok Linux AArch64 artifact | `https://x.ai/cli/grok-1.0.0-linux-aarch64` | version `1.0.0`; size `133745832`; SHA-256 `bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f`; observed version `grok 1.0.0 (3cd0d0cbce)` | lock tracked; binary generated into debug asset only and not tracked |
+| Grok Linux AArch64 artifact | `https://x.ai/cli/grok-1.0.0-linux-aarch64` | version `1.0.0`; size `133745832`; SHA-256 `bb7c51116564a2219f6a49850815060f416918ac407f1f2ba82c53c0b0d4383f`; observed version `grok 1.0.0 (3cd0d0cbce)` | lock tracked; binary generated into all variant assets and not tracked |
 | Official installer | `https://x.ai/cli/install.sh` | Linux AArch64 selection and version smoke reviewed; no signed checksum validation observed | not copied or executed by the Android app |
 
 The upstream checksum is not a published signature. Phase 2 now fails closed on the project lock,
@@ -158,5 +159,6 @@ source was copied into this project.
 
 ```bash
 sh scripts/verify-reference-source-map.sh \
-  /Volumes/ExternalSSD/projects_8/alpine-llm-gateway
+  "$ALPINE_REFERENCE_REPO" \
+  b81a7d8ee12af72ff95180bfeadabe68e5be950e
 ```

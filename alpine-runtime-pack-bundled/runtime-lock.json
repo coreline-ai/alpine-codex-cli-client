@@ -26,7 +26,7 @@
     },
     "vulnerability_snapshot": {
       "path": "security/alpine-vulnerability-snapshot.json",
-      "sha256": "8621e3d0bff725f83fc6fe1fbad6c9a3271ad9f3882bb9b59c7e13125e602305",
+      "sha256": "32b7e84dbecb46085511a0ef3af01f60f74c35ef3e6bd6eaf929af97197609c7",
       "size": 925
     }
   },

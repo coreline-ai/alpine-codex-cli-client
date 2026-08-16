@@ -2,6 +2,10 @@
 
 Date: `2026-08-12 KST`
 
+> 이 문서는 실제 OAuth 전 credential-free preflight의 역사적 기록이다. 이후 공식 Grok OAuth,
+> live model, 실제 streaming turn, Stop과 복구가 완료됐다. 최신 상태는
+> [`project-overview.md`](project-overview.md)를 참고한다.
+
 ## Scope and privacy boundary
 
 This is a credential-free feasibility record for the official Grok CLI in the existing Android app-private Alpine/PRoot environment. It does not contain a device serial, Device Code, verification URL, account identifier, credential, prompt, response, browser capture, or retained ACP transcript.
@@ -74,7 +78,7 @@ grok --no-auto-update agent --no-leader --agent-profile <fixed-chat-only-profile
 
 Allowed environment names are limited to `HOME`, `GROK_HOME`, `GROK_LOGIN_DEVICE_FLOW`, `GROK_DISABLE_API_KEY_AUTH`, `GROK_DISABLE_AUTOUPDATER`, `GROK_SUBAGENTS`, `GROK_TELEMETRY_ENABLED`, `GROK_TELEMETRY_TRACE_UPLOAD`, and `GROK_EXTERNAL_OTEL`, with the values fixed by the development plan.
 
-## Known limitations and next gate
+## Preflight 당시 limitations and next gate
 
 - The official CLI can internally recover authentication and resubmit before user-visible output. Android and Gateway dispatch remain exactly once; post-output retry must fail the turn.
 - The official artifact has no upstream signed checksum in the reviewed installer.

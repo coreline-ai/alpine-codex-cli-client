@@ -2,10 +2,16 @@
 
 Date: `2026-08-15 KST`
 
-이 문서는 현재 누적 작업 트리와 Samsung secure-debug 검증 상태의 인계 기준선이다. 실제 계정
-정보, OAuth URL/challenge, model 내용, prompt/response, raw log와 capture는 포함하지 않는다.
+이 문서는 Grok Phase 9 완료 시점의 Samsung secure-debug 검증과 당시 작업 트리를 보존한 역사적
+인계 기준선이다. 실제 계정 정보, OAuth URL/challenge, model 내용, prompt/response, raw log와
+capture는 포함하지 않는다.
 
-## 현재 인계 요약
+> 현재 구현 기준선은 `e15b808`이며 제품 transport는 TCP loopback이 아니라 private UDS다.
+> 최신 credential-free gate는 Python 160 tests와 Gradle 884 tasks를 통과했다. APK 내장 offline
+> Python pack과 release 경계까지 포함한 현재 상태는 [`project-overview.md`](project-overview.md)를
+> 우선한다. 아래 APK hash와 116/516 수치는 당시 artifact evidence로 유지한다.
+
+## 당시 인계 요약
 
 | 항목 | 현재 상태 |
 |---|---|
@@ -95,7 +101,7 @@ sh scripts/verify-secure-debug-milestone.sh
 세부 redacted 근거는 [Samsung Grok E2E evidence](samsung-grok-secure-debug-e2e.md), 재현 절차는
 [Samsung secure-debug runbook](samsung-grok-secure-debug-runbook.md)을 따른다.
 
-## 잔여 항목과 승인 경계
+## 당시 잔여 항목과 승인 경계
 
 - [x] official Grok Device OAuth 성공
 - [x] live dynamic model catalog 준비/선택
@@ -111,7 +117,7 @@ logout, Runtime 종료, uninstall, clear-data, credential 파일 읽기/삭제, 
 기기/app mutation은 이번 구현 범위에서 수행하지 않았다. 실제 Codex 유료 turn, prompt 자동
 retry/replay, 다른 Agent fallback도 발생하지 않았다.
 
-## Git 인계 상태
+## 당시 Git 인계 상태
 
 - Branch: `main`
 - 작업 시작 기준 HEAD와 `origin/main`: `ec94f99e45982af8fffc6d1b9e96b7362c2c3d43`

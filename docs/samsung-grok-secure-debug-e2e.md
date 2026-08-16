@@ -2,6 +2,11 @@
 
 Date: `2026-08-15 KST`
 
+> 아래 APK hash와 116/516 수치는 Grok OAuth/turn/Stop을 완료한 당시 artifact evidence다. 이후
+> transport가 private UDS로 전환되고 backup migration, 공급망, APK 내장 Python 경로가 추가됐다.
+> 구현 기준선 `e15b808`의 credential-free gate는 Python 160 tests와 Gradle 884 tasks를 통과했으며,
+> 최신 전체 상태는 [`project-overview.md`](project-overview.md)를 따른다.
+
 ## Privacy and mutation boundary
 
 - Target alias: `SAMSUNG_TARGET`; Samsung `SM-S931N`, `arm64-v8a`.

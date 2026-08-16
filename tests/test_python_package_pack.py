@@ -37,12 +37,16 @@ def tar_gzip(entries: dict[str, bytes]) -> bytes:
     return gzip.compress(output.getvalue(), mtime=0)
 
 
-def alpine_package(name: str = "python3", version: str = "3.12.0-r0") -> bytes:
+def alpine_package(
+    name: str = "python3",
+    version: str = "3.12.0-r0",
+    architecture: str = "aarch64",
+) -> bytes:
     signature = tar_gzip({".SIGN.RSA.fixture.rsa.pub": b"fixture-signature"})
     control = tar_gzip(
         {
             ".PKGINFO": (
-                f"pkgname = {name}\npkgver = {version}\narch = aarch64\n"
+                f"pkgname = {name}\npkgver = {version}\narch = {architecture}\n"
             ).encode()
         }
     )
@@ -177,6 +181,28 @@ class PythonPackagePackTest(unittest.TestCase):
             lock_path.write_text(json.dumps(lock))
             with self.assertRaises(MODULE.PythonPackagePackError):
                 MODULE.validate_pack(source)
+
+    def test_noarch_dependency_is_accepted_but_foreign_architecture_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_pack(Path(directory) / "source")
+            path = source / "packages/python3-3.12.0-r0.apk"
+            lock_path = source / "python-pack.lock.json"
+            lock = json.loads(lock_path.read_text())
+
+            noarch = alpine_package(architecture="noarch")
+            path.write_bytes(noarch)
+            lock["packages"][0]["size"] = len(noarch)
+            lock["packages"][0]["sha256"] = digest(noarch)
+            lock_path.write_text(json.dumps(lock))
+            MODULE.validate_pack(source, require_production=True)
+
+            foreign = alpine_package(architecture="x86_64")
+            path.write_bytes(foreign)
+            lock["packages"][0]["size"] = len(foreign)
+            lock["packages"][0]["sha256"] = digest(foreign)
+            lock_path.write_text(json.dumps(lock))
+            with self.assertRaises(MODULE.PythonPackagePackError):
+                MODULE.validate_pack(source, require_production=True)
 
     def test_unsigned_package_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

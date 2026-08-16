@@ -49,6 +49,7 @@ python3 scripts/verify-sensitive-evidence.py \
   docs/samsung-debug-e2e-evidence.md \
   docs/grok-phase8-security-evidence.md \
   docs/samsung-grok-secure-debug-e2e.md \
+  docs/samsung-app-real-use-qa-20260816.md \
   docs/samsung-backup-migration-evidence.md
 sh scripts/verify-reference-source-map.sh "$reference_repo" "$reference_commit"
 sh scripts/verify-runtime-reference-manifest.sh "$reference_repo" "$reference_commit"
