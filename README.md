@@ -2,9 +2,19 @@
 
 ![Android 앱 안에서 Codex와 Grok을 실행하는 Alpine Agent CLI Client](docs/images/readme-hero-agent-runtime.webp)
 
-공식 **OpenAI Codex CLI**와 **xAI Grok CLI**를 Android 앱 내부의 app-private Alpine
-Runtime에서 실행하는 멀티 Agent 채팅 클라이언트입니다. Android가 Provider API를 직접 호출하거나
-API key를 보관하지 않고, 각 공식 CLI가 소유한 Device OAuth와 관리형 프로토콜을 사용합니다.
+**한국어 요약** — 공식 **OpenAI Codex CLI**와 **xAI Grok CLI**를 Android 앱 내부의
+app-private Alpine Runtime에서 실행하는 보안 중심 멀티 Agent 클라이언트입니다. Android가
+Provider API를 직접 호출하거나 API key를 보관하지 않고, 각 공식 CLI가 소유한 Device OAuth와
+관리형 프로토콜을 사용합니다.
+
+**English summary** — A security-focused Android multi-agent client that runs the official
+**OpenAI Codex CLI** and **xAI Grok CLI** inside an app-private Alpine Runtime. Android never stores
+provider API keys or calls provider APIs directly; authentication and provider traffic remain owned
+by each official CLI.
+
+**Tags** — `Android` · `Kotlin` · `Jetpack Compose` · `AI Agent` · `Multi-Agent` · `Codex` · `Grok` ·
+`OAuth` · `Alpine Linux` · `PRoot` · `Local-First` · `On-Device AI` · `Offline-First` · `Security` ·
+`Unix Domain Socket` · `Open Source`
 
 > **배포 상태 — 서명 입력 대기**
 > 이 작업 환경에는 검증된 production Alpine Python pack이 Git-ignored 로컬 입력으로 준비되어
